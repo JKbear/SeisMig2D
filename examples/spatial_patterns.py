@@ -11,7 +11,7 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from src.catalog_reader import CatalogReaderFactory, EarthquakeEvent
-from src.seismic_analyzer import MigrationAnalyzer, calculate_bearings
+from src.seismic_analyzer import MigrationAnalyzer, calculate_directivities
 import numpy as np
 from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
@@ -59,11 +59,11 @@ def main():
     print("\n--- Directional Analysis by Region ---")
     for region_name, region_events in [("South", south_events), ("North", north_events)]:
         if len(region_events) >= 2:
-            result = calculate_bearings(region_events, min_distance_km=0.5, max_distance_km=100)
+            result = calculate_directivities(region_events, min_distance_km=0.5, max_distance_km=100)
             stats = result.statistics
             print(f"  {region_name} ({len(region_events)} events):")
             print(f"    Pairs: {stats['total_pairs']}, "
-                  f"mean bearing: {stats['mean_bearing']:.1f}°, "
+                  f"mean directivity: {stats['mean_directivity']:.1f}°, "
                   f"resultant length: {stats['resultant_length']:.3f}")
             if result.gaussian_fits:
                 print(f"    Main direction: {result.gaussian_fits[0]['mean']:.1f}°")

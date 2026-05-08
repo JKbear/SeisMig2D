@@ -10,7 +10,7 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from src.catalog_reader import CatalogReaderFactory, EarthquakeEvent
-from src.seismic_analyzer import calculate_bearings
+from src.seismic_analyzer import calculate_directivities
 import numpy as np
 from datetime import datetime, timedelta
 
@@ -34,15 +34,15 @@ def main():
         events.append(event)
     print(f"  Created {len(events)} synthetic events")
 
-    # Step 2: Run bearing analysis
-    print("\nRunning bearing analysis...")
-    result = calculate_bearings(events, min_distance_km=1.0, max_distance_km=50.0)
+    # Step 2: Run directivity analysis
+    print("\nRunning directivity analysis...")
+    result = calculate_directivities(events, min_distance_km=1.0, max_distance_km=50.0)
     stats = result.statistics
 
     # Step 3: Print results
     print("\nResults:")
     print(f"  Total event pairs: {stats['total_pairs']}")
-    print(f"  Mean bearing: {stats['mean_bearing']:.1f}°")
+    print(f"  Mean directivity: {stats['mean_directivity']:.1f}°")
     print(f"  Circular std: {stats['circular_std']:.1f}°")
     print(f"  Resultant length: {stats['resultant_length']:.3f}")
 
@@ -53,13 +53,13 @@ def main():
 
     # Step 4: Quick visualization
     try:
-        from src.visualizer import plot_bearing_histogram
-        plot_bearing_histogram(
+        from src.visualizer import plot_directivity_histogram
+        plot_directivity_histogram(
             result,
-            title="Quick Start — Bearing Distribution",
-            save_filename="quickstart_bearing_histogram.png"
+            title="Quick Start — Directivity Distribution",
+            save_filename="quickstart_directivity_histogram.png"
         )
-        print("\n  Plot saved to figures/quickstart_bearing_histogram.png")
+        print("\n  Plot saved to figures/quickstart_directivity_histogram.png")
     except Exception as e:
         print(f"\n  Plot error: {e}")
 

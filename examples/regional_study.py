@@ -11,7 +11,7 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from src.catalog_reader import CatalogReaderFactory, EarthquakeEvent, filter_events_by_magnitude
-from src.seismic_analyzer import MigrationAnalyzer, calculate_bearings
+from src.seismic_analyzer import MigrationAnalyzer, calculate_directivities
 import numpy as np
 from datetime import datetime, timedelta
 
@@ -41,11 +41,11 @@ def main():
     print("\n--- Distance-Dependent Analysis ---")
     distance_ranges = [(0.1, 10.0), (10.0, 50.0), (50.0, 500.0)]
     for min_d, max_d in distance_ranges:
-        result = calculate_bearings(events, min_distance_km=min_d, max_distance_km=max_d)
+        result = calculate_directivities(events, min_distance_km=min_d, max_distance_km=max_d)
         stats = result.statistics
         dom = result.gaussian_fits[0]['mean'] if result.gaussian_fits else None
         print(f"  {min_d:5.1f}–{max_d:5.1f} km: {stats['total_pairs']:5d} pairs, "
-              f"mean bearing: {stats['mean_bearing']:6.1f}°, "
+              f"mean directivity: {stats['mean_directivity']:6.1f}°, "
               f"dominant: {dom if dom else 'N/A'}")
 
     # Study 2: Multi-window temporal analysis

@@ -10,7 +10,7 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from src.catalog_reader import CatalogReaderFactory, EarthquakeEvent
-from src.seismic_analyzer import analyze_seismicity_migration, calculate_bearings
+from src.seismic_analyzer import analyze_seismicity_migration, calculate_directivities
 import matplotlib.pyplot as plt
 import numpy as np
 from datetime import datetime, timedelta
@@ -30,14 +30,14 @@ def main():
         print("Sample file not found, creating synthetic data...")
         events = create_synthetic_data()
 
-    # Step 2: Bearing-only analysis (fast)
-    print("\nRunning bearing analysis...")
-    bearing_results = calculate_bearings(
+    # Step 2: Directivity-only analysis (fast)
+    print("\nRunning directivity analysis...")
+    directivity_results = calculate_directivities(
         events=events,
         min_distance_km=0.1,
         max_distance_km=100.0
     )
-    print_bearing_summary(bearing_results)
+    print_directivity_summary(directivity_results)
 
     # Step 3: Comprehensive migration analysis (slower, use --full-analysis equivalent)
     print("\nRunning comprehensive migration analysis...")
@@ -51,7 +51,7 @@ def main():
 
     # Step 4: Create visualization
     print("\nCreating visualizations...")
-    create_visualizations(events, bearing_results, results)
+    create_visualizations(events, directivity_results, results)
 
     print("\nAnalysis complete!")
 
@@ -114,36 +114,36 @@ def print_analysis_summary(results):
             print(f"  Direction {i}: {d['mean']:.1f}° ± {d['std']:.1f}°")
 
 
-def print_bearing_summary(bearing_results):
-    """Print bearing analysis summary using v4 API."""
+def print_directivity_summary(directivity_results):
+    """Print directivity analysis summary using v4 API."""
     print("\n" + "=" * 50)
-    print("BEARING ANALYSIS RESULTS")
+    print("DIRECTIVITY ANALYSIS RESULTS")
     print("=" * 50)
 
-    stats = bearing_results.statistics
+    stats = directivity_results.statistics
     print(f"Total event pairs: {stats.get('total_pairs', 'N/A')}")
-    print(f"Mean bearing: {stats.get('mean_bearing', 0):.1f}°")
+    print(f"Mean directivity: {stats.get('mean_directivity', 0):.1f}°")
     print(f"Circular std: {stats.get('circular_std', 0):.1f}°")
     print(f"Resultant length: {stats.get('resultant_length', 0):.3f}")
 
-    if len(bearing_results.gaussian_fits) > 0:
+    if len(directivity_results.gaussian_fits) > 0:
         print(f"\nGaussian fits:")
-        for i, fit in enumerate(bearing_results.gaussian_fits, 1):
+        for i, fit in enumerate(directivity_results.gaussian_fits, 1):
             print(f"  Fit {i}: mean={fit['mean']:.1f}°, std={fit['std']:.1f}°, amplitude={fit['amplitude']:.3f}")
 
 
-def create_visualizations(events, bearing_results, analysis_result):
+def create_visualizations(events, directivity_results, analysis_result):
     """Create visualizations using v4 API."""
-    from src.visualizer import plot_bearing_histogram, plot_polar_histogram, plot_epicenter_map
+    from src.visualizer import plot_directivity_histogram, plot_polar_histogram, plot_epicenter_map
 
     try:
-        plot_bearing_histogram(
-            bearing_results,
-            title="Bearing Distribution — Basic Example",
-            save_filename="example_bearing_histogram.png"
+        plot_directivity_histogram(
+            directivity_results,
+            title="Directivity Distribution — Basic Example",
+            save_filename="example_directivity_histogram.png"
         )
         plot_polar_histogram(
-            bearing_results,
+            directivity_results,
             title="Polar Distribution — Basic Example",
             save_filename="example_polar_histogram.png"
         )

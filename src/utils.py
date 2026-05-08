@@ -2,7 +2,7 @@
 Seismicity Migration Analysis Utilities Module
 
 This module contains utility functions for coordinate conversion,
-bearing calculation, color mapping, and other common operations.
+directivity calculation, color mapping, and other common operations.
 """
 
 import numpy as np
@@ -45,8 +45,8 @@ class GeometryCalculator:
     """Geometry calculation utility class"""
 
     @staticmethod
-    def calculate_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-        """Calculate bearing angle between two points (0-360 degrees)."""
+    def calculate_directivity(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """Calculate directivity angle between two points (0-360 degrees)."""
         lat1_rad = math.radians(lat1)
         lat2_rad = math.radians(lat2)
         delta_lon = math.radians(lon2 - lon1)
@@ -55,9 +55,9 @@ class GeometryCalculator:
         x = (math.cos(lat1_rad) * math.sin(lat2_rad) -
              math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(delta_lon))
 
-        bearing = math.degrees(math.atan2(y, x))
-        bearing = (bearing + 360) % 360
-        return bearing
+        directivity = math.degrees(math.atan2(y, x))
+        directivity = (directivity + 360) % 360
+        return directivity
 
     @staticmethod
     def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -77,11 +77,11 @@ class GeometryCalculator:
         return distance
 
     @staticmethod
-    def calculate_distance_and_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> Tuple[float, float]:
-        """Calculate both distance and bearing simultaneously."""
+    def calculate_distance_and_directivity(lat1: float, lon1: float, lat2: float, lon2: float) -> Tuple[float, float]:
+        """Calculate both distance and directivity simultaneously."""
         distance = GeometryCalculator.calculate_distance(lat1, lon1, lat2, lon2)
-        bearing = GeometryCalculator.calculate_bearing(lat1, lon1, lat2, lon2)
-        return distance, bearing
+        directivity = GeometryCalculator.calculate_directivity(lat1, lon1, lat2, lon2)
+        return distance, directivity
 
 # matplotlib imported once at module level for ColorMapper
 _MATPLOTLIB_IMPORTED = False
@@ -99,13 +99,12 @@ class ColorMapper:
     """Color mapping utility class"""
 
     @staticmethod
-    def get_color(angle: float, colormap: str = "viridis") -> str:
-        """Get color based on angle."""
+    def get_color(angle: float, colormap: str = "gist_rainbow"):
+        """Get color based on angle. Returns RGBA tuple matching reference style."""
         if _MATPLOTLIB_IMPORTED:
             normalized_angle = angle / 360.0
             cmap = plt.get_cmap(colormap)
-            color = cmap(normalized_angle)
-            return mcolors.to_hex(color)
+            return cmap(normalized_angle)
         else:
             colors = [
                 "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",

@@ -27,11 +27,24 @@ SeismicityMigration is a scientific computing tool for analyzing seismic activit
 - Migration direction evolution over time
 - Time window analysis
 
+### 🔀 Temporal Ratio Analysis (NEW)
+- Sliding-window N2/N1 ratio evolution
+- Peak region counting and ratio calculation
+- 95% confidence interval under null hypothesis
+- Multi-window comparison with log-scale plots
+
+### ⚡ SEP Dtime & Speed Analysis (NEW)
+- Inter-event time (dtime) statistics per pair
+- Migration speed (km/s) per pair
+- Ping-pong effect filter (min_dtime_seconds)
+- Dtime/speed histograms and time-evolution scatter plots
+
 ### 📈 Visualization Features
 - Static graphics: histograms, polar plots, epicenter distribution maps
 - Interactive visualizations (requires Plotly)
 - Comprehensive analysis dashboard
 - Support for multiple output formats (SVG, PDF, PNG)
+- 10+ plot types including ratio evolution, peak region histograms, dtime/speed evolution
 
 ### 🤖 Machine Learning (planned)
 - Seismic activity pattern recognition
@@ -46,7 +59,7 @@ SeisMig2D/
 │   ├── config.py                # Configuration management
 │   ├── utils.py                 # Utility functions (coordinate conversion, validation, statistics)
 │   ├── catalog_reader.py        # Earthquake catalog readers (CSV and fixed-format text)
-│   ├── seismic_analyzer.py      # Core analysis (bearing, histogram, peaks, Gaussian fitting)
+│   ├── seismic_analyzer.py      # Core analysis (directivity, histogram, peaks, Gaussian fitting)
 │   ├── visualizer.py            # Matplotlib + Plotly visualizations
 ├── data/                        # Sample data files
 ├── figures/                     # Output figures directory
@@ -110,6 +123,13 @@ python main.py -i data/earthquakes.csv -o results/ --min-mag 4.0 --start-date "2
 # Complete analysis with temporal/spatial/magnitude analysis (slower)
 python main.py -i data/earthquakes.csv -o results/ --full-analysis
 
+# Temporal sliding ratio analysis (N2/N1 ratio over time)
+python main.py -i data/earthquakes.csv -o results/ --temporal-ratio
+python main.py -i data/earthquakes.csv -o results/ --temporal-ratio --ratio-window-sizes "7,30,60,90,120" --ratio-time-step 1
+
+# Filter concurrent event pairs (ping-pong effect)
+python main.py -i data/earthquakes.csv -o results/ --min-dtime 10
+
 # Generate interactive visualizations
 python main.py -i data/earthquakes.csv -o results/ --interactive
 ```
@@ -128,18 +148,28 @@ python main.py -i data/earthquakes.csv -o results/ --interactive
   --end-date           结束日期（格式: YYYY-MM-DD）
   
   # 分析类型
-  --bearing-only       仅执行方位角分析
-  --full-analysis      执行完整分析
+  --directivity-only       仅执行方向分析（默认）
+  --full-analysis          执行完整分析（含时空震级）
+  --temporal-ratio         启用时序滑动窗口比率分析（N2/N1）
+  
+  # 时序比率参数
+  --ratio-window-sizes     窗口尺寸列表，逗号分隔（如 "7,30,60,90,120"）
+  --ratio-time-step        步长天数（默认: 0.5）
+  --peak-half-width        峰值区域半宽，度（默认: 30）
+  --ratio-min-events       最小事件对数阈值（默认: 10）
+  
+  # 反乒乓滤波
+  --min-dtime              最小时间间隔秒数（默认: 10，设为0关闭）
   
   # 可视化选项
-  --no-plots           不生成图形
-  --interactive        生成交互式可视化
-  --plot-format        图形格式（svg/pdf/png）
+  --no-plots               不生成图形
+  --interactive            生成交互式可视化
+  --plot-format            图形格式（svg/pdf/png）
   
   # 其他选项
-  --batch              批处理模式
-  --debug              启用调试模式
-  --quiet              静默模式
+  --batch                  批处理模式
+  --debug                  启用调试模式
+  --quiet                  静默模式
 ```
 
 ## Data Formats
@@ -202,7 +232,7 @@ The configuration file uses JSON format. Valid top-level keys are `base`, `catal
 - `batch_analysis_summary.json`: Batch processing summary report
 
 ### Visualization Files
-- `*_bearing_histogram.svg`: Azimuth histogram
+- `*_directivity_histogram.svg`: Azimuth histogram
 - `*_polar_histogram.svg`: Polar azimuth plot
 - `*_epicenter_map.svg`: Epicenter distribution map
 - `*_analysis_dashboard.svg`: Comprehensive analysis dashboard
@@ -313,7 +343,7 @@ SeismicityMigration: A Python Tool for Earthquake Migration Analysis
 ## Changelog
 
 ### v4.0.0 (Current Version)
-- 🔧 Default mode changed to bearing-only (fast path); use `--full-analysis` for comprehensive analysis
+- 🔧 Default mode changed to directivity-only (fast path); use `--full-analysis` for comprehensive analysis
 - 🐛 Fixed b-value estimation (5th percentile Mc, Aki-Utsu MLE method)
 - 🐛 Fixed save_figure file extension bug
 - 🐛 Fixed hardcoded bar widths in histograms (now adaptive)
@@ -325,7 +355,7 @@ SeismicityMigration: A Python Tool for Earthquake Migration Analysis
 ### v3.0.0
 - 🔧 Complete code structure refactoring
 - 📊 Enhanced visualization features
-- 🚀 Performance optimization with vectorized bearing calculation
+- 🚀 Performance optimization with vectorized directivity calculation
 - 🐛 Fixed known issues
 - 📚 Improved documentation
 
@@ -335,7 +365,7 @@ SeismicityMigration: A Python Tool for Earthquake Migration Analysis
 
 ### v1.0.0
 - ✨ Initial version release
-- 📖 Basic bearing analysis and Gaussian fitting
+- 📖 Basic directivity analysis and Gaussian fitting
 
 ## Acknowledgments
 

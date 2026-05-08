@@ -11,7 +11,7 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from src.catalog_reader import CatalogReaderFactory, EarthquakeEvent
-from src.seismic_analyzer import calculate_bearings
+from src.seismic_analyzer import calculate_directivities
 import numpy as np
 from datetime import datetime, timedelta
 
@@ -34,10 +34,10 @@ def main():
     events = create_synthetic_data()
     print(f"  Created {len(events)} events")
 
-    # Run bearing analysis
-    print("Running bearing analysis...")
-    bearing_result = calculate_bearings(events, min_distance_km=1.0, max_distance_km=100.0)
-    print(f"  {bearing_result.statistics['total_pairs']} event pairs")
+    # Run directivity analysis
+    print("Running directivity analysis...")
+    directivity_result = calculate_directivities(events, min_distance_km=1.0, max_distance_km=100.0)
+    print(f"  {directivity_result.statistics['total_pairs']} event pairs")
 
     # Create interactive map
     print("\n--- Interactive Epicenter Map ---")
@@ -66,18 +66,18 @@ def main():
     fig_map.write_html("../figures/interactive_map.html")
     print("  Saved to figures/interactive_map.html")
 
-    # Create interactive bearing histogram
-    print("\n--- Interactive Bearing Histogram ---")
-    bin_centers = bearing_result.bin_centers
-    histogram = bearing_result.histogram
+    # Create interactive directivity histogram
+    print("\n--- Interactive Directivity Histogram ---")
+    bin_centers = directivity_result.bin_centers
+    histogram = directivity_result.histogram
 
     fig_hist = go.Figure(data=[go.Bar(
         x=bin_centers, y=histogram,
-        hovertemplate='<b>Bearing: %{x:.1f}°</b><br>Frequency: %{y}<extra></extra>'
+        hovertemplate='<b>Directivity: %{x:.1f}°</b><br>Frequency: %{y}<extra></extra>'
     )])
 
     # Add Gaussian fits
-    for i, fit in enumerate(bearing_result.gaussian_fits):
+    for i, fit in enumerate(directivity_result.gaussian_fits):
         x_smooth = np.linspace(0, 360, 1000)
         y_smooth = fit['amplitude'] * np.exp(-((x_smooth - fit['mean']) ** 2) / (2 * fit['std'] ** 2))
         fig_hist.add_trace(go.Scatter(
@@ -87,8 +87,8 @@ def main():
         ))
 
     fig_hist.update_layout(
-        title="Interactive Bearing Distribution",
-        xaxis_title="Bearing (degrees)",
+        title="Interactive Directivity Distribution",
+        xaxis_title="Directivity (degrees)",
         yaxis_title="Frequency",
         showlegend=True
     )
@@ -100,16 +100,16 @@ def main():
 
 def run_static_demo():
     """Fallback to static matplotlib visualizations."""
-    from src.visualizer import plot_bearing_histogram, plot_epicenter_map
-    from src.seismic_analyzer import calculate_bearings
+    from src.visualizer import plot_directivity_histogram, plot_epicenter_map
+    from src.seismic_analyzer import calculate_directivities
 
     events = create_synthetic_data()
-    bearing_result = calculate_bearings(events, min_distance_km=1.0, max_distance_km=100.0)
+    directivity_result = calculate_directivities(events, min_distance_km=1.0, max_distance_km=100.0)
 
     plot_epicenter_map(events, title="Earthquake Epicenters",
                        save_filename="interactive_demo_epicenter_map.png")
-    plot_bearing_histogram(bearing_result, title="Bearing Distribution",
-                           save_filename="interactive_demo_bearing_histogram.png")
+    plot_directivity_histogram(directivity_result, title="Directivity Distribution",
+                           save_filename="interactive_demo_directivity_histogram.png")
     print("  Static plots saved to figures/ directory")
 
 

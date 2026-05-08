@@ -13,6 +13,7 @@ import matplotlib.colors as mcolors
 from matplotlib.patches import Rectangle
 from matplotlib.collections import LineCollection
 from typing import List, Dict, Optional, Tuple, Any
+from datetime import datetime
 import warnings
 import os
 
@@ -30,7 +31,7 @@ except ImportError:
 
 from src.config import get_config
 from src.catalog_reader import EarthquakeEvent
-from src.seismic_analyzer import BearingAnalysisResult, MigrationAnalysisResult
+from src.seismic_analyzer import DirectivityAnalysisResult, MigrationAnalysisResult, DirectivityAnalyzer, TemporalDirectivityResult
 from src.utils import get_color_mapper, get_coordinate_converter
 
 # Get global configuration and tools
@@ -38,6 +39,12 @@ config = get_config()
 color_mapper = get_color_mapper()
 coordinate_converter = get_coordinate_converter()
 logger = logging.getLogger(__name__)
+
+
+def _gaussian(x: np.ndarray, amplitude: float, mean: float, std: float) -> np.ndarray:
+    """Gaussian function used across histogram/polar plots."""
+    return amplitude * np.exp(-((x - mean) ** 2) / (2 * std ** 2))
+
 
 class BaseVisualizer:
     """Base visualizer"""
@@ -48,13 +55,6 @@ class BaseVisualizer:
         self.dpi = dpi or config.base.DPI
         self.color_palette: Dict[str, str] = config.visualization.COLORS
 
-        try:
-            plt.style.use('seaborn-v0_8')
-        except Exception:
-            try:
-                plt.style.use('seaborn')
-            except Exception:
-                pass  # Fall back to default style
         plt.rcParams['figure.figsize'] = self.figsize
         plt.rcParams['figure.dpi'] = self.dpi
         plt.rcParams['font.size'] = config.base.FONT_SIZE
@@ -80,37 +80,15 @@ class BaseVisualizer:
         """Close figure"""
         plt.close(fig)
 
-class BearingVisualizer(BaseVisualizer):
-    """Bearing angle visualizer"""
+class DirectivityVisualizer(BaseVisualizer):
+    """Directivity angle visualizer"""
 
-    def _add_bearing_stats_box(self, ax: plt.Axes, statistics: Dict[str, Any]):
-        """Helper to add statistics box to a bearing histogram."""
-        stats_text = f"""
-        Total pairs: {statistics.get('total_pairs', 'N/A')}
-        Mean bearing: {statistics.get('mean_bearing', 0.0):.1f}°
-        Std bearing: {statistics.get('std_bearing', 0.0):.1f}°
-        """
-        ax.text(0.02, 0.98, stats_text, transform=ax.transAxes,
-               verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-
-    def _add_polar_stats_box(self, fig: plt.Figure, statistics: Dict[str, Any]):
-        """Helper to add statistics box to a polar plot."""
-        stats_text = f"""
-        Total pairs: {statistics.get('total_pairs', 'N/A')}
-        Mean: {statistics.get('mean_bearing', 0.0):.1f}°
-        Std: {statistics.get('std_bearing', 0.0):.1f}°
-        """
-        fig.text(0.5, 0.95, stats_text, transform=fig.transFigure,
-               ha='center', va='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-
-
-    def plot_bearing_histogram(self, analysis_result: BearingAnalysisResult,
-                             title: str = "Bearing Distribution",
+    def plot_directivity_histogram(self, analysis_result: DirectivityAnalysisResult,
+                             title: str = "Directivity Distribution",
                              show_gaussian_fits: bool = True,
-                             show_statistics: bool = True,
                              save_filename: Optional[str] = None,
                              ax: Optional[plt.Axes] = None) -> plt.Figure:
-        """Plot bearing angle histogram"""
+        """Plot directivity angle histogram"""
         if ax is None:
             fig, ax = plt.subplots(figsize=self.figsize)
         else:
@@ -118,36 +96,55 @@ class BearingVisualizer(BaseVisualizer):
 
         bin_centers = analysis_result.bin_centers
         histogram = analysis_result.histogram
+        cmap_name = config.base.COLOR_MAP
 
         bar_width = 360.0 / len(bin_centers)
-        colors = [color_mapper.get_color(angle, config.base.COLOR_MAP) for angle in bin_centers]
-        ax.bar(bin_centers, histogram, width=bar_width, color=colors, alpha=0.7, edgecolor='black', linewidth=0.5)
+        colors = [color_mapper.get_color(angle, cmap_name) for angle in bin_centers]
+        ax.bar(bin_centers, histogram, width=bar_width, color=colors, alpha=0.7,
+               edgecolor='k', linewidth=0.5, label='Histogram')
+
+        # Detected peaks as black dots
+        if len(analysis_result.peaks) > 0:
+            peak_centers = bin_centers[analysis_result.peaks]
+            peak_heights = histogram[analysis_result.peaks]
+            ax.plot(peak_centers, peak_heights, 'ko', markersize=5, label='Detected Peaks')
 
         if show_gaussian_fits and analysis_result.gaussian_fits:
             x_smooth = np.linspace(0, 360, 1000)
 
-            def gaussian(x: np.ndarray, amplitude: float, mean: float, std: float) -> np.ndarray:
-                return amplitude * np.exp(-((x - mean) ** 2) / (2 * std ** 2))
-
             for i, fit in enumerate(analysis_result.gaussian_fits):
-                y_smooth = gaussian(x_smooth, fit['amplitude'], fit['mean'], fit['std'])
-                ax.plot(x_smooth, y_smooth, 'r-', linewidth=2,
-                       label=f"Gaussian {i+1}: μ={fit['mean']:.1f}°, σ={fit['std']:.1f}°")
-                ax.axvline(fit['mean'], color='red', linestyle='--', alpha=0.7)
-                ax.text(fit['mean'], fit['amplitude'] * 1.1, f"{fit['mean']:.1f}°",
-                       ha='center', va='bottom', fontsize=10, color='red')
+                y_smooth = _gaussian(x_smooth, fit['amplitude'], fit['mean'], fit['std'])
+                gauss_label = 'Fitted Gaussian Curves' if i == 0 else None
+                ax.plot(x_smooth, y_smooth, color='red', linestyle='--', linewidth=2,
+                       label=gauss_label)
+                # Annotate near peak
+                peak_y = fit['amplitude']
+                # First peak(s) near left edge → annotate on right;
+                # later peaks → annotate on left to avoid legend overlap
+                if fit['mean'] > 100:
+                    text_x = fit['mean'] - 40
+                else:
+                    text_x = fit['mean'] + 5
+                ax.text(text_x, peak_y,
+                       f'Mean: {fit["mean"]:.0f}°\nStd: {fit["std"]:.2f}',
+                       verticalalignment='center', horizontalalignment='left', fontsize=9)
 
-        ax.set_xlabel('Bearing (degrees)', fontsize=12)
-        ax.set_ylabel('Frequency', fontsize=12)
+        ax.set_xlabel('Direction from the East (degree)', fontsize=12)
+        ax.set_ylabel('Number of Earthquake Pairs', fontsize=12)
         ax.set_title(title, fontsize=14, fontweight='bold')
         ax.set_xlim(0, 360)
-        ax.grid(True, alpha=0.3)
+        ax.grid(True, alpha=0.3, color='gray', linestyle='--')
 
-        if show_gaussian_fits and analysis_result.gaussian_fits:
-            ax.legend(loc='upper right', fontsize=10)
+        ax.legend(loc='upper right')
 
-        if show_statistics:
-            self._add_bearing_stats_box(ax, analysis_result.statistics)
+        # Colorbar showing angle → color mapping
+        sm = plt.cm.ScalarMappable(cmap=cmap_name, norm=plt.Normalize(vmin=0, vmax=360))
+        sm.set_array([])
+        cbar = plt.colorbar(sm, ax=ax, label='Direction (degrees)', orientation='vertical')
+        cbar.set_ticks(np.linspace(0, 360, num=5))
+        cbar.set_ticklabels([f'{int(x)}°' for x in np.linspace(0, 360, num=5)])
+        cbar.outline.set_color('black')
+        cbar.outline.set_linewidth(0.5)
 
         plt.tight_layout()
 
@@ -156,36 +153,65 @@ class BearingVisualizer(BaseVisualizer):
 
         return fig
 
-    def plot_polar_histogram(self, analysis_result: BearingAnalysisResult,
-                           title: str = "Polar Bearing Distribution",
-                           show_statistics: bool = True,
+    def plot_polar_histogram(self, analysis_result: DirectivityAnalysisResult,
+                           title: str = "Polar Directivity Distribution",
                            save_filename: Optional[str] = None,
                            ax: Optional[plt.Axes] = None) -> plt.Figure:
-        """Plot polar bearing angle histogram"""
+        """Plot polar directivity angle histogram"""
         if ax is None:
             fig = plt.figure(figsize=(self.figsize[0], self.figsize[0]))
             ax = fig.add_subplot(111, projection='polar')
         else:
             fig = ax.get_figure() # type: ignore
 
-        bin_centers_rad = np.radians(analysis_result.bin_centers)
+        bin_centers = analysis_result.bin_centers
         histogram = analysis_result.histogram
+        cmap_name = config.base.COLOR_MAP
 
-        n_bins = len(analysis_result.bin_centers)
-        colors = [color_mapper.get_color(angle, config.base.COLOR_MAP) for angle in analysis_result.bin_centers]
-
+        n_bins = len(bin_centers)
+        bin_centers_rad = np.radians(bin_centers)
         width = 2 * np.pi / n_bins
-        ax.bar(bin_centers_rad, histogram, width=width, bottom=0.0,
-               color=colors, alpha=0.7, edgecolor='black', linewidth=0.5)
+        colors = [color_mapper.get_color(angle, cmap_name) for angle in bin_centers]
 
-        ax.set_theta_zero_location('N')
-        ax.set_theta_direction(-1)
-        ax.set_thetagrids(np.arange(0, 360, 30))
+        bars = ax.bar(bin_centers_rad, histogram, width=width, bottom=0.0,
+                      color=colors, alpha=0.7, edgecolor='k', linewidth=0.5)
 
-        ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
+        # Grid: thin dashed lines
+        ax.grid(True, linestyle='--', alpha=0.7, linewidth=0.5)
 
-        if show_statistics:
-            self._add_polar_stats_box(fig, analysis_result.statistics)
+        # East as zero, clockwise
+        ax.set_theta_zero_location('E')
+        ax.set_theta_direction(1)
+
+        # Cardinal direction labels at edge (below title)
+        rmax = ax.get_rmax()
+        ax.text(0, rmax * 1.12, 'E', ha='center', va='center', fontsize=12, fontweight='bold')
+        ax.text(np.pi / 2, rmax * 1.14, 'N', ha='center', va='center', fontsize=12, fontweight='bold')
+        ax.text(np.pi, rmax * 1.17, 'W', ha='center', va='center', fontsize=12, fontweight='bold')
+        ax.text(3 * np.pi / 2, rmax * 1.12, 'S', ha='center', va='center', fontsize=12, fontweight='bold')
+
+        # ax.set_title(title, fontsize=14, fontweight='bold', pad=28)
+
+        # Gaussian fits: red dashed curves with annotations
+        if analysis_result.gaussian_fits:
+            def gaussian(x: np.ndarray, amplitude: float, mean: float, std: float) -> np.ndarray:
+                return amplitude * np.exp(-((x - mean) ** 2) / (2 * std ** 2))
+
+            x_range = np.linspace(0, 2 * np.pi, 1000)
+            for fit in analysis_result.gaussian_fits:
+                fitted_curve = gaussian(np.degrees(x_range), fit['amplitude'], fit['mean'], fit['std'])
+                ax.plot(x_range, fitted_curve, 'r--', linewidth=2)
+                ax.text(np.radians(fit['mean']), ax.get_ylim()[1] * 0.85,
+                       f'Mean: {fit["mean"]:.0f}°\nStd: {fit["std"]:.2f}',
+                       ha='center', va='bottom', fontsize=9, color='black')
+
+        # Colorbar
+        sm = plt.cm.ScalarMappable(cmap=cmap_name, norm=plt.Normalize(vmin=0, vmax=360))
+        sm.set_array([])
+        cbar = plt.colorbar(sm, ax=ax, label='Direction (degrees)',
+                          orientation='vertical', pad=0.1, shrink=0.5)
+        cbar.set_ticks(np.linspace(0, 360, num=5))
+        cbar.set_ticklabels([f'{int(x)}°' for x in np.linspace(0, 360, num=5)])
 
         plt.tight_layout()
 
@@ -194,43 +220,63 @@ class BearingVisualizer(BaseVisualizer):
 
         return fig
 
-    def plot_bearing_evolution(self, events: List[EarthquakeEvent],
+    def plot_directivity_evolution(self,
+                             window_analysis: Optional[List[Dict[str, Any]]] = None,
+                             events: Optional[List[EarthquakeEvent]] = None,
                              time_window_days: int = 30,
-                             title: str = "Bearing Evolution Over Time",
+                             title: str = "Directivity Evolution Over Time",
                              save_filename: Optional[str] = None) -> plt.Figure:
-        """Plot bearing angle evolution over time"""
-        events_with_time = sorted([e for e in events if e.time], key=lambda x: x.time)
-        if len(events_with_time) < 2:
-            raise ValueError("At least 2 earthquake events with time information are required")
+        """Plot directivity angle evolution over time.
 
-        from datetime import datetime
-        times: List[datetime] = []
-        dominant_directions: List[float] = []
-        event_counts: List[int] = []
+        Prefer passing window_analysis (from MigrationAnalysisResult) to
+        avoid recomputing sliding windows. Falls back to events for
+        backwards compatibility.
+        """
+        if window_analysis:
+            times = [w['time'] for w in window_analysis]
+            dominant_directions = [w['dominant_direction'] for w in window_analysis
+                                   if w['dominant_direction'] is not None]
+            event_counts = [w['event_count'] for w in window_analysis]
+            # Re-align after filtering None directions
+            valid_indices = [i for i, w in enumerate(window_analysis)
+                           if w['dominant_direction'] is not None]
+            times = [times[i] for i in valid_indices]
+            event_counts = [event_counts[i] for i in valid_indices]
+        elif events:
+            events_with_time = sorted([e for e in events if e.time], key=lambda x: x.time)
+            if len(events_with_time) < 2:
+                raise ValueError("At least 2 earthquake events with time information are required")
 
-        analyzer = BearingAnalyzer()
-        for i, current_event in enumerate(events_with_time):
-            window_start_ts = current_event.time.timestamp() - time_window_days * 24 * 3600
-            window_events = [
-                event for event in events_with_time
-                if window_start_ts <= event.time.timestamp() <= current_event.time.timestamp()
-            ]
+            """  # noqa — module-level import above"""
+            times_dt: List[datetime] = []
+            dominant_directions_dt: List[float] = []
+            event_counts_dt: List[int] = []
 
-            if len(window_events) >= 2:
-                try:
-                    result = analyzer.analyze_bearings(window_events)
-
-                    if result.gaussian_fits:
-                        dominant_direction = result.gaussian_fits[0]['mean']
-                        times.append(current_event.time)
-                        dominant_directions.append(dominant_direction)
-                        event_counts.append(len(window_events))
-
-                except ValueError:
-                    continue
+            analyzer = DirectivityAnalyzer()
+            for i, current_event in enumerate(events_with_time):
+                window_start_ts = current_event.time.timestamp() - time_window_days * 24 * 3600
+                window_events = [
+                    event for event in events_with_time
+                    if window_start_ts <= event.time.timestamp() <= current_event.time.timestamp()
+                ]
+                if len(window_events) >= 2:
+                    try:
+                        result = analyzer.analyze_directivities(window_events)
+                        if result.gaussian_fits:
+                            dominant_direction_dt = result.gaussian_fits[0]['mean']
+                            times_dt.append(current_event.time)
+                            dominant_directions_dt.append(dominant_direction_dt)
+                            event_counts_dt.append(len(window_events))
+                    except ValueError:
+                        continue
+            times = times_dt
+            dominant_directions = dominant_directions_dt
+            event_counts = event_counts_dt
+        else:
+            raise ValueError("Provide window_analysis or events")
 
         if not times:
-            raise ValueError("Not enough events in time window for analysis")
+            raise ValueError("Not enough data for evolution plot")
 
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(self.figsize[0], self.figsize[1] * 1.5), sharex=True)
 
@@ -256,13 +302,219 @@ class BearingVisualizer(BaseVisualizer):
 
         return fig
 
+    def plot_histogram_with_peak_regions(self,
+                                          analysis_result: DirectivityAnalysisResult,
+                                          peak_half_width: float = 30,
+                                          title: str = "Directivity Distribution with Peak Regions",
+                                          save_filename: Optional[str] = None,
+                                          ax: Optional[plt.Axes] = None) -> plt.Figure:
+        """Plot directivity histogram with peak region highlights and N2/N1 ratio."""
+        if ax is None:
+            fig, ax = plt.subplots(figsize=self.figsize)
+        else:
+            fig = ax.get_figure() # type: ignore
+
+        bin_centers = analysis_result.bin_centers
+        histogram = analysis_result.histogram
+        cmap_name = config.base.COLOR_MAP
+
+        bar_width = 360.0 / len(bin_centers)
+        colors = [color_mapper.get_color(angle, cmap_name) for angle in bin_centers]
+        ax.bar(bin_centers, histogram, width=bar_width, color=colors, alpha=0.7,
+               edgecolor='k', linewidth=0.5, label='Histogram')
+
+        # Detected peaks
+        peaks = analysis_result.peaks
+        peak_centers = bin_centers[peaks]
+        if len(peaks) > 0:
+            ax.plot(peak_centers, histogram[peaks], 'ko', markersize=5,
+                   label='Detected Peaks')
+
+        # Gaussian fits with annotations
+        if analysis_result.gaussian_fits:
+            x_smooth = np.linspace(0, 360, 1000)
+            for i, fit in enumerate(analysis_result.gaussian_fits):
+                y_smooth = _gaussian(x_smooth, fit['amplitude'], fit['mean'], fit['std'])
+                gauss_label = 'Fitted Gaussian Curves' if i == 0 else None
+                ax.plot(x_smooth, y_smooth, color='red', linestyle='--', linewidth=2,
+                       label=gauss_label)
+                peak_y = fit['amplitude']
+                if fit['mean'] > 100:
+                    text_x = fit['mean'] - 40
+                else:
+                    text_x = fit['mean'] + 5
+                ax.text(text_x, peak_y,
+                       f'Mean: {fit["mean"]:.0f}°\nStd: {fit["std"]:.2f}',
+                       verticalalignment='center', horizontalalignment='left', fontsize=9)
+
+        # Peak region highlights and ratio
+        if len(peaks) >= 2:
+            directivities = analysis_result.directivities
+            center1 = bin_centers[peaks[0]]
+            center2 = bin_centers[peaks[1]]
+            count1 = DirectivityAnalyzer.count_samples_in_peak_region(directivities, center1, peak_half_width)
+            count2 = DirectivityAnalyzer.count_samples_in_peak_region(directivities, center2, peak_half_width)
+
+            ymax = ax.get_ylim()[1] * 1.15
+            ax.set_ylim(0, ymax)
+
+            # Peak 1 region (blue)
+            p1_l = (center1 - peak_half_width) % 360
+            p1_r = (center1 + peak_half_width) % 360
+            if p1_l < p1_r:
+                ax.fill_between([p1_l, p1_r], [0, 0], [ymax, ymax],
+                               color='blue', alpha=0.2, label='Peak 1 Region')
+            else:
+                ax.fill_between([0, p1_r], [0, 0], [ymax, ymax],
+                               color='blue', alpha=0.2)
+                ax.fill_between([p1_l, 360], [0, 0], [ymax, ymax],
+                               color='blue', alpha=0.2, label='Peak 1 Region')
+
+            # Peak 2 region (red)
+            p2_l = (center2 - peak_half_width) % 360
+            p2_r = (center2 + peak_half_width) % 360
+            if p2_l < p2_r:
+                ax.fill_between([p2_l, p2_r], [0, 0], [ymax, ymax],
+                               color='red', alpha=0.2, label='Peak 2 Region')
+            else:
+                ax.fill_between([0, p2_r], [0, 0], [ymax, ymax],
+                               color='red', alpha=0.2)
+                ax.fill_between([p2_l, 360], [0, 0], [ymax, ymax],
+                               color='red', alpha=0.2, label='Peak 2 Region')
+
+            ratio = count2 / count1 if count1 > 0 else None
+            if ratio is not None:
+                mid_x = (center1 + center2) / 2.0
+                ax.text(mid_x, 0.95,
+                       f'Peak 1 count: {count1}\nPeak 2 count: {count2}\nN2/N1 ratio: {ratio:.2f}',
+                       transform=ax.get_xaxis_transform(),
+                       verticalalignment='top', horizontalalignment='center',
+                       bbox=dict(facecolor='white', alpha=0.8), fontsize=9)
+
+        ax.set_xlabel('Direction from the East (degree)', fontsize=12)
+        ax.set_ylabel('Number of Earthquake Pairs', fontsize=12)
+        ax.set_title(title, fontsize=14, fontweight='bold')
+        ax.set_xlim(0, 360)
+        ax.grid(True, alpha=0.3, color='gray', linestyle='--')
+        ax.legend(loc='upper right')
+
+        sm = plt.cm.ScalarMappable(cmap=cmap_name, norm=plt.Normalize(vmin=0, vmax=360))
+        sm.set_array([])
+        cbar = plt.colorbar(sm, ax=ax, label='Direction (degrees)', orientation='vertical')
+        cbar.set_ticks(np.linspace(0, 360, num=5))
+        cbar.set_ticklabels([f'{int(x)}°' for x in np.linspace(0, 360, num=5)])
+        cbar.outline.set_color('black')
+        cbar.outline.set_linewidth(0.5)
+
+        plt.tight_layout()
+        if save_filename:
+            self.save_figure(fig, save_filename)
+        return fig
+
+    def plot_directivity_ratio_evolution(self,
+                                          temporal_result: TemporalDirectivityResult,
+                                          show_confidence: bool = True,
+                                          title: str = "Directivity Ratio Evolution",
+                                          save_filename: Optional[str] = None) -> plt.Figure:
+        """Plot N2/N1 ratio evolution for multiple window sizes (log y-scale)."""
+        fig, ax = plt.subplots(figsize=(12, 8))
+
+        color_palette = ['blue', 'red', 'green', 'purple', 'orange']
+
+        for idx, ws in enumerate(temporal_result.window_sizes):
+            days = temporal_result.times_by_window[idx]
+            ratios = temporal_result.ratios_by_window[idx]
+            if len(days) == 0:
+                continue
+            color = color_palette[idx % len(color_palette)]
+            ax.plot(days, ratios, linestyle='-', marker='.',
+                   color=color, markersize=2, linewidth=2,
+                   label=f'{ws:.1f} days')
+
+            # Confidence interval shading (label only first time)
+            if show_confidence:
+                ci_lower = temporal_result.ci_lower_by_window[idx]
+                ci_upper = temporal_result.ci_upper_by_window[idx]
+                if len(ci_lower) == len(days) and len(days) > 0:
+                    ci_label = '95% CI (H\u2080: ratio=1)' if idx == 0 else None
+                    ax.fill_between(days, ci_lower, ci_upper,
+                                   color='gray', alpha=0.15, label=ci_label)
+
+        ax.set_yscale('log')
+        ax.set_ylim([0.1, 10.0])
+        ax.set_yticks([0.1, 0.2, 0.5, 1, 2, 5, 10])
+        ax.set_yticklabels(['0.1', '0.2', '0.5', '1', '2', '5', '10'])
+        ax.axhline(y=1, color='k', linestyle='--', alpha=0.3)
+        ax.set_xlabel('Days since first event', fontsize=12)
+        ax.set_ylabel('N2/N1 Ratio', fontsize=12)
+        ax.set_title(title, fontsize=14, fontweight='bold')
+        ax.grid(True, which='both', ls='-', alpha=0.2)
+        # Reorder: 95% CI at the bottom
+        handles, labels = ax.get_legend_handles_labels()
+        ci_idx = next((i for i, lbl in enumerate(labels) if 'CI' in lbl), None)
+        if ci_idx is not None:
+            handles.append(handles.pop(ci_idx))
+            labels.append(labels.pop(ci_idx))
+        ax.legend(handles, labels, loc='upper left', fontsize=9, framealpha=0.85)
+
+        plt.tight_layout()
+        if save_filename:
+            self.save_figure(fig, save_filename)
+        return fig
+
+    def plot_single_window_ratio(self,
+                                  temporal_result: TemporalDirectivityResult,
+                                  window_index: Optional[int] = None,
+                                  show_confidence: bool = True,
+                                  title: str = "Directivity Ratio (Best Window)",
+                                  save_filename: Optional[str] = None) -> plt.Figure:
+        """Plot N2/N1 ratio for a single best window size.
+
+        Selects the window with the most data points by default.
+        """
+        # Pick best window: most data points
+        if window_index is None:
+            n_points = [len(arr) for arr in temporal_result.times_by_window]
+            if all(n == 0 for n in n_points):
+                raise ValueError("No data in any window")
+            window_index = int(np.argmax(n_points))
+
+        ws = temporal_result.window_sizes[window_index]
+        days = temporal_result.times_by_window[window_index]
+        ratios = temporal_result.ratios_by_window[window_index]
+        ci_lower = temporal_result.ci_lower_by_window[window_index]
+        ci_upper = temporal_result.ci_upper_by_window[window_index]
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        if show_confidence and len(ci_lower) == len(days) and len(days) > 0:
+            ax.fill_between(days, ci_lower, ci_upper,
+                           color='gray', alpha=0.2,
+                           label='95% CI (H\u2080: ratio=1)')
+
+        ax.plot(days, ratios, 'b-', linewidth=2, label=f'{ws:.1f} days window')
+        ax.plot(days, ratios, 'b.', markersize=3, alpha=0.5)
+
+        ax.axhline(y=1, color='k', linestyle='--', alpha=0.3, label='Ratio = 1')
+
+        ax.set_xlabel('Days since first event', fontsize=12)
+        ax.set_ylabel('N2/N1 Ratio', fontsize=12)
+        ax.set_title(title, fontsize=14, fontweight='bold')
+        ax.grid(True, linestyle='--', alpha=0.4)
+        ax.legend(loc='upper left', fontsize=10, framealpha=0.85)
+
+        plt.tight_layout()
+        if save_filename:
+            self.save_figure(fig, save_filename)
+        return fig
+
 class SeismicityVisualizer(BaseVisualizer):
     """Seismic activity visualizer"""
 
     def plot_epicenter_map(self, events: List[EarthquakeEvent],
                           title: str = "Earthquake Epicenters",
                           show_magnitude: bool = True,
-                          color_by_time: bool = False,
+                          color_by_directivity: bool = True,
                           save_filename: Optional[str] = None,
                           ax: Optional[plt.Axes] = None) -> plt.Figure:
         """Plot earthquake epicenter distribution"""
@@ -287,21 +539,71 @@ class SeismicityVisualizer(BaseVisualizer):
             return (mag - min_mag) / mag_range * 100 + 10
 
         colors: Any
-        cmap: str
+        cmap_name: str
         cbar_label: str
-        if color_by_time and any(e.time for e in events):
-            times_ts = [e.time.timestamp() if e.time else 0 for e in events]
-            colors = times_ts
-            cmap = 'viridis'
-            cbar_label = 'Time'
-        else:
+
+        directivity_assigned = False
+        first_event_idx: Optional[int] = None
+        if color_by_directivity and len(events) >= 2:
+            events_with_time = [e for e in events if e.time is not None]
+            if len(events_with_time) >= 2:
+                sorted_events = sorted(events, key=lambda e: e.time)
+                sorted_lats = np.array([e.latitude for e in sorted_events])
+                sorted_lons = np.array([e.longitude for e in sorted_events])
+
+                # Haversine directivity for consecutive pairs
+                lat1 = np.radians(sorted_lats[:-1])
+                lat2 = np.radians(sorted_lats[1:])
+                lon1 = np.radians(sorted_lons[:-1])
+                lon2 = np.radians(sorted_lons[1:])
+
+                y = np.sin(lon2 - lon1) * np.cos(lat2)
+                x = (np.cos(lat1) * np.sin(lat2) -
+                     np.sin(lat1) * np.cos(lat2) * np.cos(lon2 - lon1))
+                pair_directivities = np.degrees(np.arctan2(y, x))
+                pair_directivities = (pair_directivities + 360) % 360
+
+                # Assign directivity to each event: event i gets directivity i-1→i
+                event_to_directivity: Dict[int, float] = {}
+                for i, e in enumerate(sorted_events):
+                    if i == 0:
+                        event_to_directivity[id(e)] = pair_directivities[0]
+                    else:
+                        event_to_directivity[id(e)] = float(pair_directivities[i - 1])
+
+                colors = [event_to_directivity[id(e)] for e in events]
+                cmap_name = config.base.COLOR_MAP
+                cbar_label = 'Directivity (°)'
+                directivity_assigned = True
+
+                # Find first event (earliest in time) in original list for star marker
+                first_event = sorted_events[0]
+                for idx, e in enumerate(events):
+                    if id(e) == id(first_event):
+                        first_event_idx = idx
+                        break
+
+        if not directivity_assigned:
             colors = mags
-            cmap = 'Reds'
+            cmap_name = 'Reds'
             cbar_label = 'Magnitude'
 
         sizes = [get_size(m) for m in mags]
 
-        scatter = ax.scatter(lons, lats, c=colors, s=sizes, cmap=cmap, alpha=0.7, edgecolors='black', linewidth=0.5)
+        scatter_kwargs: Dict[str, Any] = dict(
+            c=colors, s=sizes, cmap=cmap_name, alpha=0.7, edgecolors='k', linewidth=0.5
+        )
+        if directivity_assigned:
+            scatter_kwargs['vmin'] = 0
+            scatter_kwargs['vmax'] = 360
+
+        scatter = ax.scatter(lons, lats, **scatter_kwargs)
+
+        # Mark first event (earliest in time) with a red star
+        if first_event_idx is not None:
+            ax.scatter(lons[first_event_idx], lats[first_event_idx],
+                      marker='*', color='red', s=get_size(mags[first_event_idx]) * 1.5,
+                      zorder=5, label='First event')
 
         ax.set_xlabel('Longitude', fontsize=12)
         ax.set_ylabel('Latitude', fontsize=12)
@@ -310,17 +612,25 @@ class SeismicityVisualizer(BaseVisualizer):
 
         cbar = plt.colorbar(scatter, ax=ax)
         cbar.set_label(cbar_label, fontsize=12)
+        if directivity_assigned:
+            cbar.set_ticks(np.linspace(0, 360, num=5))
+            cbar.set_ticklabels([f'{int(x)}°' for x in np.linspace(0, 360, num=5)])
 
         if show_magnitude:
             mag_handles = []
             mag_levels = sorted(list(set([min_mag, np.mean(mags), max_mag])))
             for mag in mag_levels:
                 mag_handles.append(ax.scatter([], [], c='gray', s=get_size(mag),
-                                   alpha=0.7, edgecolors='black'))
+                                   alpha=0.7, edgecolors='k'))
 
-            ax.legend(mag_handles,
-                     [f'{mag:.1f}' for mag in mag_levels],
-                     title='Magnitude', loc='upper right', fontsize=10, frameon=True)
+            legend_labels = [f'{mag:.1f}' for mag in mag_levels]
+            if first_event_idx is not None:
+                mag_handles.append(ax.scatter([], [], marker='*', color='red', s=100,
+                                   edgecolors='k'))
+                legend_labels.append('First event')
+
+            ax.legend(mag_handles, legend_labels,
+                     title='Magnitude', loc='best', fontsize=10, frameon=True)
 
         plt.tight_layout()
 
@@ -348,13 +658,13 @@ class SeismicityVisualizer(BaseVisualizer):
             ax1 = ax
             ax2 = None
 
-        ax1.scatter(times, mags, c=mags, cmap='Reds', s=30, alpha=0.7, edgecolors='black', linewidth=0.5)
+        ax1.scatter(times, mags, c=mags, cmap='Reds', s=30, alpha=0.7, edgecolors='k', linewidth=0.5)
         ax1.set_ylabel('Magnitude', fontsize=12)
         ax1.set_title(title, fontsize=14, fontweight='bold')
         ax1.grid(True, alpha=0.3)
 
         if ax2 is not None:
-            ax2.hist(mags, bins=20, alpha=0.7, color='skyblue', edgecolor='black')
+            ax2.hist(mags, bins=20, alpha=0.7, color='skyblue', edgecolor='k')
             ax2.set_xlabel('Time', fontsize=12)
             ax2.set_ylabel('Frequency', fontsize=12)
             ax2.grid(True, alpha=0.3)
@@ -389,7 +699,7 @@ class SeismicityVisualizer(BaseVisualizer):
             ax1 = ax
             ax2 = None
 
-        ax1.hist(depths, bins=30, alpha=0.7, color='green', edgecolor='black')
+        ax1.hist(depths, bins=30, alpha=0.7, color='green', edgecolor='k')
         ax1.set_xlabel('Depth (km)', fontsize=12)
         ax1.set_ylabel('Frequency', fontsize=12)
         ax1.set_title(f'{title} - Histogram', fontsize=12)
@@ -417,6 +727,149 @@ class SeismicityVisualizer(BaseVisualizer):
         if save_filename:
             self.save_figure(fig, save_filename)
 
+        return fig
+
+    def plot_dtime_histogram(self, analysis_result: DirectivityAnalysisResult,
+                             bins: int = 50, dtime_range: Optional[Tuple[float, float]] = None,
+                             title: str = "Inter-event Time Distribution",
+                             save_filename: Optional[str] = None,
+                             ax: Optional[plt.Axes] = None) -> plt.Figure:
+        """Plot histogram of inter-event times (seconds)."""
+        if ax is None:
+            fig, ax = plt.subplots(figsize=self.figsize)
+        else:
+            fig = ax.get_figure() # type: ignore
+
+        dtimes = analysis_result.dtimes_seconds
+        if len(dtimes) == 0:
+            ax.set_title(title)
+            return fig
+
+        valid = dtimes[dtimes > 0]
+        if dtime_range is None:
+            dtime_range = (0, np.percentile(valid, 99))
+        ax.hist(valid, bins=bins, range=dtime_range, edgecolor='k', alpha=0.7, color='gray')
+        ax.set_xlabel('Dtime (seconds)', fontsize=12)
+        ax.set_ylabel('Number of Earthquake Pairs', fontsize=12)
+        ax.set_title(title, fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+
+        mean_v = np.mean(valid)
+        median_v = np.median(valid)
+        ax.text(0.98, 0.95, f'Mean: {mean_v:.1f} s\nMedian: {median_v:.1f} s',
+                transform=ax.transAxes, verticalalignment='top',
+                horizontalalignment='right',
+                bbox=dict(facecolor='white', alpha=0.8), fontsize=10)
+        # Mark mean and median on histogram
+        ax.axvline(mean_v, color='red', linestyle='--', linewidth=1.5, alpha=0.7, label='Mean')
+        ax.axvline(median_v, color='blue', linestyle='--', linewidth=1.5, alpha=0.7, label='Median')
+        ax.legend(loc='upper left', fontsize=9)
+
+        plt.tight_layout()
+        if save_filename:
+            self.save_figure(fig, save_filename)
+        return fig
+
+    def plot_speed_histogram(self, analysis_result: DirectivityAnalysisResult,
+                             bins: int = 50, speed_range: Optional[Tuple[float, float]] = None,
+                             title: str = "Migration Speed Distribution",
+                             save_filename: Optional[str] = None,
+                             ax: Optional[plt.Axes] = None) -> plt.Figure:
+        """Plot histogram of migration speeds (km/s)."""
+        if ax is None:
+            fig, ax = plt.subplots(figsize=self.figsize)
+        else:
+            fig = ax.get_figure() # type: ignore
+
+        speeds = analysis_result.speeds
+        if len(speeds) == 0:
+            ax.set_title(title)
+            return fig
+
+        valid = speeds[~np.isnan(speeds)]
+        if speed_range is None:
+            speed_range = (0, np.percentile(valid, 95))
+        ax.hist(valid, bins=bins, range=speed_range, edgecolor='k', alpha=0.7, color='gray')
+        ax.set_xlabel('Speed (km/s)', fontsize=12)
+        ax.set_ylabel('Number of Earthquake Pairs', fontsize=12)
+        ax.set_title(title, fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+
+        mean_v = np.mean(valid)
+        median_v = np.median(valid)
+        ax.text(0.98, 0.95, f'Mean: {mean_v:.5f} km/s\nMedian: {median_v:.5f} km/s',
+                transform=ax.transAxes, verticalalignment='top',
+                horizontalalignment='right',
+                bbox=dict(facecolor='white', alpha=0.8), fontsize=10)
+        ax.axvline(mean_v, color='red', linestyle='--', linewidth=1.5, alpha=0.7, label='Mean')
+        ax.axvline(median_v, color='blue', linestyle='--', linewidth=1.5, alpha=0.7, label='Median')
+        ax.legend(loc='upper left', fontsize=9)
+
+        plt.tight_layout()
+        if save_filename:
+            self.save_figure(fig, save_filename)
+        return fig
+
+    def plot_dtime_evolution(self, analysis_result: DirectivityAnalysisResult,
+                             title: str = "SEP Inter-event Time vs. Time",
+                             save_filename: Optional[str] = None,
+                             ax: Optional[plt.Axes] = None) -> plt.Figure:
+        """Plot SEP dtime vs. pair occurrence time."""
+        if ax is None:
+            fig, ax = plt.subplots(figsize=self.figsize)
+        else:
+            fig = ax.get_figure() # type: ignore
+
+        dtimes = analysis_result.dtimes_seconds
+        pair_times = analysis_result.pair_times
+        if len(dtimes) == 0 or len(pair_times) == 0:
+            ax.set_title(title)
+            return fig
+
+        """  # noqa — module-level import above"""
+        pair_dt = [datetime.fromtimestamp(t) for t in pair_times]
+        valid = dtimes > 0
+        ax.scatter([pair_dt[i] for i in range(len(pair_dt)) if valid[i]],
+                  dtimes[valid], s=5, alpha=0.5, color='steelblue')
+        ax.set_ylabel('Dtime (seconds)', fontsize=12)
+        ax.set_xlabel('Pair Time', fontsize=12)
+        ax.set_title(title, fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        fig.autofmt_xdate()
+        plt.tight_layout()
+        if save_filename:
+            self.save_figure(fig, save_filename)
+        return fig
+
+    def plot_speed_evolution(self, analysis_result: DirectivityAnalysisResult,
+                             title: str = "SEP Speed vs. Time",
+                             save_filename: Optional[str] = None,
+                             ax: Optional[plt.Axes] = None) -> plt.Figure:
+        """Plot SEP speed vs. pair occurrence time."""
+        if ax is None:
+            fig, ax = plt.subplots(figsize=self.figsize)
+        else:
+            fig = ax.get_figure() # type: ignore
+
+        speeds = analysis_result.speeds
+        pair_times = analysis_result.pair_times
+        if len(speeds) == 0 or len(pair_times) == 0:
+            ax.set_title(title)
+            return fig
+
+        """  # noqa — module-level import above"""
+        pair_dt = [datetime.fromtimestamp(t) for t in pair_times]
+        valid = ~np.isnan(speeds)
+        ax.scatter([pair_dt[i] for i in range(len(pair_dt)) if valid[i]],
+                  speeds[valid], s=5, alpha=0.5, color='darkred')
+        ax.set_ylabel('Speed (km/s)', fontsize=12)
+        ax.set_xlabel('Pair Time', fontsize=12)
+        ax.set_title(title, fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        fig.autofmt_xdate()
+        plt.tight_layout()
+        if save_filename:
+            self.save_figure(fig, save_filename)
         return fig
 
 class InteractiveVisualizer:
@@ -472,9 +925,9 @@ class InteractiveVisualizer:
         )
         return fig
 
-    def create_interactive_histogram(self, analysis_result: BearingAnalysisResult,
-                                   title: str = "Interactive Bearing Histogram") -> "go.Figure":
-        """Create interactive bearing histogram"""
+    def create_interactive_histogram(self, analysis_result: DirectivityAnalysisResult,
+                                   title: str = "Interactive Directivity Histogram") -> "go.Figure":
+        """Create interactive directivity histogram"""
         import plotly.graph_objects as go
 
         bin_centers = analysis_result.bin_centers
@@ -483,18 +936,15 @@ class InteractiveVisualizer:
         fig = go.Figure(data=[go.Bar(
             x=bin_centers,
             y=histogram,
-            marker_color=[color_mapper.get_color(angle, config.base.COLOR_MAP) for angle in bin_centers],
-            hovertemplate='<b>Bearing: %{x:.1f}°</b><br>Frequency: %{y}<extra></extra>'
+            marker_color=[mcolors.to_hex(color_mapper.get_color(angle, config.base.COLOR_MAP)) for angle in bin_centers],
+            hovertemplate='<b>Directivity: %{x:.1f}°</b><br>Frequency: %{y}<extra></extra>'
         )])
 
         if analysis_result.gaussian_fits:
             x_smooth = np.linspace(0, 360, 1000)
 
-            def gaussian(x: np.ndarray, amplitude: float, mean: float, std: float) -> np.ndarray:
-                return amplitude * np.exp(-((x - mean) ** 2) / (2 * std ** 2))
-
             for i, fit in enumerate(analysis_result.gaussian_fits):
-                y_smooth = gaussian(x_smooth, fit['amplitude'], fit['mean'], fit['std'])
+                y_smooth = _gaussian(x_smooth, fit['amplitude'], fit['mean'], fit['std'])
 
                 fig.add_trace(go.Scatter(
                     x=x_smooth,
@@ -506,7 +956,7 @@ class InteractiveVisualizer:
 
         fig.update_layout(
             title=title,
-            xaxis_title="Bearing (degrees)",
+            xaxis_title="Directivity (degrees)",
             yaxis_title="Frequency",
             showlegend=bool(analysis_result.gaussian_fits)
         )
@@ -518,7 +968,7 @@ class ComprehensiveVisualizer(BaseVisualizer):
     def __init__(self):
         """Initialize comprehensive analysis visualizer"""
         super().__init__()
-        self.bearing_viz = BearingVisualizer()
+        self.directivity_viz = DirectivityVisualizer()
         self.seismicity_viz = SeismicityVisualizer()
 
         if PLOTLY_AVAILABLE:
@@ -555,20 +1005,20 @@ class ComprehensiveVisualizer(BaseVisualizer):
             ax2_main.text(0.5, 0.5, str(e), ha='center', va='center', wrap=True)
             ax2_main.set_title("Magnitude vs Time")
 
-        # 3. Bearing histogram
+        # 3. Directivity histogram
         ax3 = fig.add_subplot(gs[1, :])
-        self.bearing_viz.plot_bearing_histogram(
+        self.directivity_viz.plot_directivity_histogram(
             analysis_result.directional_analysis,
-            title="Bearing Distribution with Gaussian Fits",
+            title="Directivity Distribution with Gaussian Fits",
             show_statistics=False,
             ax=ax3
         )
 
         # 4. Polar plot
         ax4 = fig.add_subplot(gs[2, 0], projection='polar')
-        self.bearing_viz.plot_polar_histogram(
+        self.directivity_viz.plot_polar_histogram(
             analysis_result.directional_analysis,
-            title="Polar Bearing",
+            title="Polar Directivity",
             show_statistics=False,
             ax=ax4
         )
@@ -577,7 +1027,7 @@ class ComprehensiveVisualizer(BaseVisualizer):
         ax5 = fig.add_subplot(gs[2, 1])
         depths = [e.depth for e in events]
         if depths:
-            ax5.hist(depths, bins=20, alpha=0.7, color='green', edgecolor='black')
+            ax5.hist(depths, bins=20, alpha=0.7, color='green', edgecolor='k')
         ax5.set_xlabel('Depth (km)')
         ax5.set_ylabel('Frequency')
         ax5.set_title('Depth Distribution')
@@ -587,7 +1037,7 @@ class ComprehensiveVisualizer(BaseVisualizer):
         ax6 = fig.add_subplot(gs[2, 2])
         mags = [e.magnitude for e in events]
         if mags:
-            ax6.hist(mags, bins=20, alpha=0.7, color='orange', edgecolor='black')
+            ax6.hist(mags, bins=20, alpha=0.7, color='orange', edgecolor='k')
         ax6.set_xlabel('Magnitude')
         ax6.set_ylabel('Frequency')
         ax6.set_title('Magnitude Distribution')
@@ -636,20 +1086,40 @@ class ComprehensiveVisualizer(BaseVisualizer):
         return fig
 
 # Convenience functions
-def plot_bearing_histogram(analysis_result: BearingAnalysisResult, **kwargs: Any) -> plt.Figure:
-    """Plot bearing histogram (convenience function)"""
-    viz = BearingVisualizer()
-    return viz.plot_bearing_histogram(analysis_result, **kwargs)
+def plot_directivity_histogram(analysis_result: DirectivityAnalysisResult, **kwargs: Any) -> plt.Figure:
+    """Plot directivity histogram (convenience function)"""
+    viz = DirectivityVisualizer()
+    return viz.plot_directivity_histogram(analysis_result, **kwargs)
 
-def plot_polar_histogram(analysis_result: BearingAnalysisResult, **kwargs: Any) -> plt.Figure:
+def plot_polar_histogram(analysis_result: DirectivityAnalysisResult, **kwargs: Any) -> plt.Figure:
     """Plot polar histogram (convenience function)"""
-    viz = BearingVisualizer()
+    viz = DirectivityVisualizer()
     return viz.plot_polar_histogram(analysis_result, **kwargs)
 
 def plot_epicenter_map(events: List[EarthquakeEvent], **kwargs: Any) -> plt.Figure:
     """Plot epicenter map (convenience function)"""
     viz = SeismicityVisualizer()
     return viz.plot_epicenter_map(events, **kwargs)
+
+def plot_dtime_histogram(analysis_result: DirectivityAnalysisResult, **kwargs: Any) -> plt.Figure:
+    """Plot dtime histogram (convenience function)"""
+    viz = SeismicityVisualizer()
+    return viz.plot_dtime_histogram(analysis_result, **kwargs)
+
+def plot_speed_histogram(analysis_result: DirectivityAnalysisResult, **kwargs: Any) -> plt.Figure:
+    """Plot speed histogram (convenience function)"""
+    viz = SeismicityVisualizer()
+    return viz.plot_speed_histogram(analysis_result, **kwargs)
+
+def plot_dtime_evolution(analysis_result: DirectivityAnalysisResult, **kwargs: Any) -> plt.Figure:
+    """Plot dtime vs time (convenience function)"""
+    viz = SeismicityVisualizer()
+    return viz.plot_dtime_evolution(analysis_result, **kwargs)
+
+def plot_speed_evolution(analysis_result: DirectivityAnalysisResult, **kwargs: Any) -> plt.Figure:
+    """Plot speed vs time (convenience function)"""
+    viz = SeismicityVisualizer()
+    return viz.plot_speed_evolution(analysis_result, **kwargs)
 
 def create_analysis_dashboard(events: List[EarthquakeEvent], analysis_result: MigrationAnalysisResult, **kwargs: Any) -> plt.Figure:
     """Create analysis dashboard (convenience function)"""

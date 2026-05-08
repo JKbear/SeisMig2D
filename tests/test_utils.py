@@ -24,28 +24,28 @@ class TestGeometryCalculator:
         dist = GeometryCalculator.calculate_distance(35, -118, 35, -118)
         assert dist == 0
 
-    def test_calculate_bearing_north(self):
-        bearing = GeometryCalculator.calculate_bearing(0, 0, 1, 0)
+    def test_calculate_directivity_north(self):
+        directivity = GeometryCalculator.calculate_directivity(0, 0, 1, 0)
         # Moving north should be around 0 degrees (or 360)
-        assert (bearing < 10) or (bearing > 350)
+        assert (directivity < 10) or (directivity > 350)
 
-    def test_calculate_bearing_east(self):
-        bearing = GeometryCalculator.calculate_bearing(0, 0, 0, 1)
-        assert 85 <= bearing <= 95  # roughly east
+    def test_calculate_directivity_east(self):
+        directivity = GeometryCalculator.calculate_directivity(0, 0, 0, 1)
+        assert 85 <= directivity <= 95  # roughly east
 
-    def test_calculate_bearing_range(self, synthetic_random):
-        # Test that bearing is always in [0, 360)
+    def test_calculate_directivity_range(self, synthetic_random):
+        # Test that directivity is always in [0, 360)
         for _ in range(10):
             lat1 = np.random.uniform(-90, 90)
             lon1 = np.random.uniform(-180, 180)
             lat2 = np.random.uniform(-90, 90)
             lon2 = np.random.uniform(-180, 180)
-            bearing = GeometryCalculator.calculate_bearing(lat1, lon1, lat2, lon2)
-            assert 0 <= bearing < 360
+            directivity = GeometryCalculator.calculate_directivity(lat1, lon1, lat2, lon2)
+            assert 0 <= directivity < 360
 
-    def test_calculate_distance_and_bearing(self):
-        dist, bearing = GeometryCalculator.calculate_distance_and_bearing(0, 0, 1, 1)
-        assert 0 <= bearing < 360
+    def test_calculate_distance_and_directivity(self):
+        dist, directivity = GeometryCalculator.calculate_distance_and_directivity(0, 0, 1, 1)
+        assert 0 <= directivity < 360
         assert dist > 0
 
 class TestCoordinateConverter:

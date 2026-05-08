@@ -2,16 +2,15 @@
 Seismic Analysis Core Module
 
 This module contains the core analysis functions for seismicity migration analysis,
-including bearing calculation, histogram generation, peak detection, and Gaussian fitting.
+including directivity calculation, histogram generation, peak detection, and Gaussian fitting.
 """
 
 import numpy as np
-import pandas as pd
 import logging
 from typing import List, Tuple, Optional, Dict, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from scipy.optimize import curve_fit
-from scipy.stats import norm
 import warnings
 
 try:
@@ -32,33 +31,47 @@ stats_calc = get_statistics_calculator()
 logger = logging.getLogger(__name__)
 
 @dataclass
-class BearingAnalysisResult:
-    """Bearing analysis result data class"""
-    bearings: np.ndarray
+class DirectivityAnalysisResult:
+    """Directivity analysis result data class"""
+    directivities: np.ndarray
     distances: np.ndarray
     weights: np.ndarray
-    histogram: np.ndarray
-    bin_edges: np.ndarray
-    bin_centers: np.ndarray
-    peaks: np.ndarray
-    peak_properties: Dict[str, Any]
-    gaussian_fits: List[Dict[str, Any]]
-    statistics: Dict[str, Any]
+    dtimes_seconds: np.ndarray = field(default_factory=lambda: np.array([]))
+    speeds: np.ndarray = field(default_factory=lambda: np.array([]))
+    pair_times: np.ndarray = field(default_factory=lambda: np.array([]))
+    histogram: np.ndarray = field(default_factory=lambda: np.array([]))
+    bin_edges: np.ndarray = field(default_factory=lambda: np.array([]))
+    bin_centers: np.ndarray = field(default_factory=lambda: np.array([]))
+    peaks: np.ndarray = field(default_factory=lambda: np.array([]))
+    peak_properties: Dict[str, Any] = field(default_factory=dict)
+    gaussian_fits: List[Dict[str, Any]] = field(default_factory=list)
+    statistics: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class MigrationAnalysisResult:
     """Migration analysis result data class"""
     temporal_analysis: Dict[str, Any]
     spatial_analysis: Dict[str, Any]
-    directional_analysis: BearingAnalysisResult
+    directional_analysis: DirectivityAnalysisResult
     magnitude_analysis: Dict[str, Any]
     summary_statistics: Dict[str, Any]
 
-class BearingAnalyzer:
-    """Bearing analyzer"""
+@dataclass
+class TemporalDirectivityResult:
+    """Temporal directivity N2/N1 ratio evolution analysis result."""
+    window_sizes: List[float]
+    times_by_window: List[np.ndarray]       # days since catalog start, per window size
+    ratios_by_window: List[np.ndarray]      # N2/N1 ratio per window
+    n_totals_by_window: List[np.ndarray]    # total pairs per window
+    ci_lower_by_window: List[np.ndarray]    # 95% CI lower bound per window
+    ci_upper_by_window: List[np.ndarray]    # 95% CI upper bound per window
+    statistics: Dict[str, Any]
+
+class DirectivityAnalyzer:
+    """Directivity analyzer"""
 
     def __init__(self):
-        """Initialize bearing analyzer"""
+        """Initialize directivity analyzer"""
         self.bins: int = config.base.HIST_BINS
         self.range: Tuple[int, int] = config.base.HIST_RANGE
         self.peak_threshold: float = config.base.GAUSSIAN_PEAK_THRESHOLD
@@ -67,26 +80,40 @@ class BearingAnalyzer:
     def calculate_event_pairs(self, events: List[EarthquakeEvent],
                               min_distance_km: float = 0.1,
                               max_distance_km: float = 1000.0,
-                              min_time_diff_hours: float = 0.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Calculate azimuth, distance and weights for earthquake event pairs (vectorized)"""
+                              min_time_diff_hours: float = 0.0,
+                              min_dtime_seconds: float = 0.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Calculate azimuth, distance, weights, dtimes, and speeds for
+        consecutive event pairs in time order. O(N) memory.
+        """
         n_events = len(events)
         if n_events < 2:
-            return np.array([]), np.array([]), np.array([])
+            return (np.array([]), np.array([]), np.array([]),
+                    np.array([]), np.array([]), np.array([]))
+
+        # Sort events by time to ensure consecutive pairs are temporally adjacent
+        events_sorted = sorted(events, key=lambda e: e.time if e.time else datetime.min)
 
         # Extract event data into arrays
-        lats = np.array([e.latitude for e in events])
-        lons = np.array([e.longitude for e in events])
-        mags = np.array([e.magnitude for e in events])
-        times = np.array([e.time for e in events])
+        lats = np.array([e.latitude for e in events_sorted])
+        lons = np.array([e.longitude for e in events_sorted])
+        mags = np.array([e.magnitude for e in events_sorted])
+        times = np.array([e.time.timestamp() if e.time else 0.0 for e in events_sorted])
 
-        # Vectorized distance and bearing calculation using broadcasting
-        lat1 = lats[:, np.newaxis]
-        lon1 = lons[:, np.newaxis]
-        lat2 = lats[np.newaxis, :]
-        lon2 = lons[np.newaxis, :]
+        # Consecutive pairs: shift arrays by 1 (O(N) memory, O(N) time)
+        lat1 = lats[:-1]
+        lon1 = lons[:-1]
+        lat2 = lats[1:]
+        lon2 = lons[1:]
+        mags_i = mags[:-1]
+        mags_j = mags[1:]
+        times_i = times[:-1]
+        times_j = times[1:]
 
-        # Haversine formula (vectorized)
-        R = 6371.0  # Earth radius in km
+        # Time gaps (seconds)
+        dtimes_seconds = times_j - times_i
+
+        # Haversine distance (vectorized on 1D arrays)
+        R = 6371.0
         lat1_rad = np.radians(lat1)
         lat2_rad = np.radians(lat2)
         delta_lat = np.radians(lat2 - lat1)
@@ -94,69 +121,47 @@ class BearingAnalyzer:
 
         a = (np.sin(delta_lat / 2)**2 +
              np.cos(lat1_rad) * np.cos(lat2_rad) * np.sin(delta_lon / 2)**2)
-        distances_matrix = R * 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
+        distances = R * 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
 
-        # Bearing formula (vectorized)
+        # Directivity formula (vectorized on 1D arrays)
         y = np.sin(np.radians(lon2 - lon1)) * np.cos(lat2_rad)
         x = (np.cos(lat1_rad) * np.sin(lat2_rad) -
              np.sin(lat1_rad) * np.cos(lat2_rad) * np.cos(np.radians(lon2 - lon1)))
-        bearings_matrix = np.degrees(np.arctan2(y, x))
-        bearings_matrix = (bearings_matrix + 360) % 360
+        directivities = np.degrees(np.arctan2(y, x))
+        directivities = (directivities + 360) % 360
 
-        # Upper triangle indices (i < j)
-        i_idx, j_idx = np.triu_indices(n_events, k=1)
-
-        bearings = bearings_matrix[i_idx, j_idx]
-        distances = distances_matrix[i_idx, j_idx]
-        mags_i = mags[i_idx]
-        mags_j = mags[j_idx]
-
-        # Filter by distance
+        # Combine all filters into a single mask
         mask = (distances >= min_distance_km) & (distances <= max_distance_km)
-        bearings = bearings[mask]
+        if min_time_diff_hours > 0:
+            mask &= (dtimes_seconds / 3600.0) >= min_time_diff_hours
+        if min_dtime_seconds > 0:
+            mask &= dtimes_seconds >= min_dtime_seconds
+
+        # Apply mask once to all arrays
+        directivities = directivities[mask]
         distances = distances[mask]
         mags_i = mags_i[mask]
         mags_j = mags_j[mask]
-        i_idx = i_idx[mask]
-        j_idx = j_idx[mask]
-
-        # Filter by time if needed
-        if min_time_diff_hours > 0 and times[0] is not None:
-            times_i = np.array([t.timestamp() if t else 0 for t in times[i_idx]])
-            times_j = np.array([t.timestamp() if t else 0 for t in times[j_idx]])
-            time_diffs = np.abs(times_j - times_i) / 3600
-            mask = time_diffs >= min_time_diff_hours
-            bearings = bearings[mask]
-            distances = distances[mask]
-            mags_i = mags_i[mask]
-            mags_j = mags_j[mask]
+        dtimes_seconds = dtimes_seconds[mask]
+        times_j = times_j[mask]
 
         # Calculate weights
         mag_weight = (mags_i + mags_j) / 2.0
         distance_weight = 1.0 / (1.0 + distances / 100.0)
         weights = mag_weight * distance_weight
 
-        return bearings, distances, weights
+        # Speeds (km/s), nan for zero/negative dt
+        speeds = np.full_like(distances, np.nan)
+        valid = dtimes_seconds > 0
+        speeds[valid] = distances[valid] / dtimes_seconds[valid]
 
-    def _calculate_weight(self, event1: EarthquakeEvent, event2: EarthquakeEvent,
-                          distance: Optional[float] = None) -> float:
-        """Calculate event pair weight"""
-        mag_weight = (event1.magnitude + event2.magnitude) / 2.0
+        return directivities, distances, weights, dtimes_seconds, speeds, times_j
 
-        if distance is None:
-            distance = geometry_calc.calculate_distance(
-                event1.latitude, event1.longitude,
-                event2.latitude, event2.longitude
-            )
-        distance_weight = 1.0 / (1.0 + distance / 100.0)
-
-        return mag_weight * distance_weight
-
-    def create_histogram(self, bearings: np.ndarray,
+    def create_histogram(self, directivities: np.ndarray,
                        weights: Optional[np.ndarray] = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Create bearing histogram"""
+        """Create directivity histogram"""
         histogram, bin_edges = np.histogram(
-            bearings,
+            directivities,
             bins=self.bins,
             range=self.range,
             weights=weights,
@@ -283,40 +288,49 @@ class BearingAnalyzer:
         r_squared = 1 - (ss_res / ss_tot)
         return max(0.0, r_squared)
 
-    def analyze_bearings(self, events: List[EarthquakeEvent],
+    def analyze_directivities(self, events: List[EarthquakeEvent],
                         min_distance_km: float = 0.1,
-                        max_distance_km: float = 1000.0) -> BearingAnalysisResult:
-        """Execute complete bearing analysis"""
-        bearings, distances, weights = self.calculate_event_pairs(
-            events, min_distance_km, max_distance_km
+                        max_distance_km: float = 1000.0,
+                        min_dtime_seconds: Optional[float] = None) -> DirectivityAnalysisResult:
+        """Execute complete directivity analysis"""
+        if min_dtime_seconds is None:
+            min_dtime_seconds = config.base.MIN_DTIME_SECONDS
+        directivities, distances, weights, dtimes_seconds, speeds, pair_times = self.calculate_event_pairs(
+            events, min_distance_km, max_distance_km,
+            min_dtime_seconds=min_dtime_seconds
         )
 
-        if len(bearings) == 0:
+        if len(directivities) == 0:
             raise ValueError("Insufficient event pairs for analysis")
 
-        histogram, bin_edges, bin_centers = self.create_histogram(bearings, weights)
+        histogram, bin_edges, bin_centers = self.create_histogram(directivities, weights)
         peaks, peak_properties = self.detect_peaks(histogram, bin_centers)
         gaussian_fits = self.fit_gaussians(histogram, bin_centers, peaks)
 
         # Calculate statistics
-        stats_data = stats_calc.calculate_circular_statistics(bearings)
+        stats_data = stats_calc.calculate_circular_statistics(directivities)
         statistics: Dict[str, Any] = {
-            'total_pairs': len(bearings),
+            'total_pairs': len(directivities),
             'mean_distance': np.mean(distances),
             'std_distance': np.std(distances),
+            'mean_dtime_seconds': float(np.mean(dtimes_seconds)) if len(dtimes_seconds) > 0 else 0.0,
+            'mean_speed_kms': float(np.mean(speeds[~np.isnan(speeds)])) if np.any(~np.isnan(speeds)) else float('nan'),
             'mean_weight': np.mean(weights),
             'n_peaks': len(peaks),
             'n_gaussian_fits': len(gaussian_fits),
             **stats_data
         }
-        statistics['mean_bearing'] = np.mean(bearings)
-        statistics['std_bearing'] = np.std(bearings)
+        statistics['mean_directivity'] = np.mean(directivities)
+        statistics['std_directivity'] = np.std(directivities)
 
 
-        return BearingAnalysisResult(
-            bearings=bearings,
+        return DirectivityAnalysisResult(
+            directivities=directivities,
             distances=distances,
             weights=weights,
+            dtimes_seconds=dtimes_seconds,
+            speeds=speeds,
+            pair_times=pair_times,
             histogram=histogram,
             bin_edges=bin_edges,
             bin_centers=bin_centers,
@@ -326,21 +340,50 @@ class BearingAnalyzer:
             statistics=statistics
         )
 
+    @staticmethod
+    def count_samples_in_peak_region(directivities: np.ndarray, peak_center: float,
+                                      half_width: float) -> int:
+        """Count samples within a half-width window around a peak center.
+
+        Handles 0/360 degree boundary crossing.
+        """
+        directivities = directivities % 360
+        lower = (peak_center - half_width) % 360
+        upper = (peak_center + half_width) % 360
+        if lower < upper:
+            return int(np.sum((directivities >= lower) & (directivities <= upper)))
+        else:
+            return int(np.sum((directivities >= lower) | (directivities <= upper)))
+
+    @staticmethod
+    def calculate_confidence_intervals(N_total: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Calculate 95% CI boundaries for N2/N1=1 under the null hypothesis.
+
+        SE = 0.5 / sqrt(N), p = 0.5 ± 1.96·SE, ratio = p/(1-p).
+        """
+        with np.errstate(divide='ignore', invalid='ignore'):
+            se = 0.5 / np.sqrt(N_total)
+            p_upper = 0.5 + 1.96 * se
+            p_lower = 0.5 - 1.96 * se
+            upper_bound = p_upper / (1.0 - p_upper)
+            lower_bound = p_lower / (1.0 - p_lower)
+        return lower_bound, upper_bound
+
 class MigrationAnalyzer:
     """Seismic migration analyzer"""
 
     def __init__(self):
         """Initialize migration analyzer"""
-        self.bearing_analyzer = BearingAnalyzer()
+        self.directivity_analyzer = DirectivityAnalyzer()
 
     def temporal_analysis(self, events: List[EarthquakeEvent],
                          time_window_days: int = 30) -> Dict[str, Any]:
         """Time series analysis.
 
-        Note: This method calls bearing analysis for each sliding window,
+        Note: This method calls directivity analysis for each sliding window,
         leading to O(n * k^2) complexity where n is the number of events
         and k is the typical window size. For catalogs with >500 events,
-        consider reducing the time window or using bearing-only analysis.
+        consider reducing the time window or using directivity-only analysis.
         """
         if not events:
             return {}
@@ -380,12 +423,12 @@ class MigrationAnalyzer:
                     window_events = window_events[-MAX_WINDOW_EVENTS:]
 
                 try:
-                    bearing_result = self.bearing_analyzer.analyze_bearings(window_events)
+                    directivity_result = self.directivity_analyzer.analyze_directivities(window_events)
                     window_results.append({
                         'time': current_event.time,
                         'event_count': len(window_events),
                         'mean_magnitude': np.mean([e.magnitude for e in window_events]),
-                        'dominant_direction': bearing_result.gaussian_fits[0]['mean'] if bearing_result.gaussian_fits else None
+                        'dominant_direction': directivity_result.gaussian_fits[0]['mean'] if directivity_result.gaussian_fits else None
                     })
                 except ValueError:
                     continue
@@ -499,7 +542,7 @@ class MigrationAnalyzer:
         if len(events) < 2:
             raise ValueError("At least 2 earthquake events are required for analysis")
 
-        directional_analysis = self.bearing_analyzer.analyze_bearings(
+        directional_analysis = self.directivity_analyzer.analyze_directivities(
             events, min_distance_km, max_distance_km
         )
 
@@ -532,6 +575,131 @@ class MigrationAnalyzer:
             summary_statistics=summary_statistics
         )
 
+    def temporal_directivity_ratio_analysis(
+        self, events: List[EarthquakeEvent],
+        window_sizes: Optional[List[float]] = None,
+        time_step: Optional[float] = None,
+        peak_half_width: Optional[float] = None,
+        min_events: Optional[int] = None
+    ) -> TemporalDirectivityResult:
+        """Sliding-window N2/N1 ratio analysis over time.
+
+        Slides windows of various sizes across the catalog, computes
+        the ratio of samples in the second dominant peak region to the
+        first, and calculates 95% confidence intervals.
+        """
+        if window_sizes is None:
+            window_sizes = config.base.SLIDING_WINDOW_SIZES
+        if time_step is None:
+            time_step = config.base.SLIDING_TIME_STEP
+        if peak_half_width is None:
+            peak_half_width = float(config.base.PEAK_HALF_WIDTH)
+        if min_events is None:
+            min_events = config.base.MIN_EVENTS_FOR_RATIO
+
+        # Sort events by time
+        events_with_time = [e for e in events if e.time is not None]
+        if len(events_with_time) < min_events:
+            raise ValueError(
+                f"At least {min_events} events with time required, got {len(events_with_time)}"
+            )
+        events_sorted = sorted(events_with_time, key=lambda e: e.time)
+        n_events = len(events_sorted)
+
+        # Calculate all directivities once (O(N)) — no distance filter to keep
+        # pair_times aligned
+        all_directivities, _, _, _, _, _ = self.directivity_analyzer.calculate_event_pairs(
+            events_sorted, min_distance_km=0.0, max_distance_km=1e9
+        )
+        if len(all_directivities) == 0:
+            raise ValueError("No valid event pairs for ratio analysis")
+
+        # Pair timestamps: pair i corresponds to events_sorted[i] -> events_sorted[i+1]
+        pair_times = np.array([
+            events_sorted[i + 1].time.timestamp() if events_sorted[i + 1].time else 0.0
+            for i in range(n_events - 1)
+        ])
+
+        start_ts = events_sorted[0].time.timestamp()
+        end_ts = events_sorted[-1].time.timestamp()
+        step_sec = time_step * 86400.0
+
+        times_by_window: List[np.ndarray] = []
+        ratios_by_window: List[np.ndarray] = []
+        n_totals_by_window: List[np.ndarray] = []
+        ci_lower_by_window: List[np.ndarray] = []
+        ci_upper_by_window: List[np.ndarray] = []
+        total_windows = 0
+
+        for ws in window_sizes:
+            window_sec = ws * 86400.0
+            times_list: List[float] = []
+            ratios_list: List[float] = []
+            n_totals_list: List[float] = []
+
+            current = start_ts
+            while current <= end_ts - window_sec:
+                window_end = current + window_sec
+                # O(log P) binary search instead of O(P) boolean mask
+                left = np.searchsorted(pair_times, current, side='left')
+                right = np.searchsorted(pair_times, window_end, side='right')
+                N = right - left
+
+                if N >= min_events:
+                    subset = all_directivities[left:right]
+                    hist, bin_edges, bin_centers = self.directivity_analyzer.create_histogram(subset)
+                    peaks, _ = self.directivity_analyzer.detect_peaks(hist, bin_centers)
+
+                    if len(peaks) >= 2:
+                        center1 = bin_centers[peaks[0]]
+                        center2 = bin_centers[peaks[1]]
+                        count1 = DirectivityAnalyzer.count_samples_in_peak_region(
+                            subset, center1, peak_half_width
+                        )
+                        count2 = DirectivityAnalyzer.count_samples_in_peak_region(
+                            subset, center2, peak_half_width
+                        )
+                        if count1 > 0:
+                            ratio = count2 / count1
+                            midpoint_ts = current + window_sec / 2.0
+                            days = (midpoint_ts - start_ts) / 86400.0
+                            times_list.append(days)
+                            ratios_list.append(ratio)
+                            n_totals_list.append(float(N))
+                            total_windows += 1
+
+                current += step_sec
+
+            times_by_window.append(np.array(times_list))
+            ratios_by_window.append(np.array(ratios_list))
+            n_totals_by_window.append(np.array(n_totals_list))
+            ci_lower, ci_upper = DirectivityAnalyzer.calculate_confidence_intervals(
+                np.array(n_totals_list)
+            )
+            ci_lower_by_window.append(ci_lower)
+            ci_upper_by_window.append(ci_upper)
+
+        statistics: Dict[str, Any] = {
+            'catalog_duration_days': (end_ts - start_ts) / 86400.0,
+            'total_pairs': len(all_directivities),
+            'total_windows_computed': total_windows,
+            'window_sizes_used': window_sizes,
+            'mean_ratio_by_window': [
+                float(np.mean(r)) if len(r) > 0 else float('nan')
+                for r in ratios_by_window
+            ],
+        }
+
+        return TemporalDirectivityResult(
+            window_sizes=window_sizes,
+            times_by_window=times_by_window,
+            ratios_by_window=ratios_by_window,
+            n_totals_by_window=n_totals_by_window,
+            ci_lower_by_window=ci_lower_by_window,
+            ci_upper_by_window=ci_upper_by_window,
+            statistics=statistics,
+        )
+
 # Convenience functions
 def analyze_seismicity_migration(events: List[EarthquakeEvent],
                                min_distance_km: float = 0.1,
@@ -541,9 +709,11 @@ def analyze_seismicity_migration(events: List[EarthquakeEvent],
     analyzer = MigrationAnalyzer()
     return analyzer.comprehensive_analysis(events, min_distance_km, max_distance_km, time_window_days)
 
-def calculate_bearings(events: List[EarthquakeEvent],
+def calculate_directivities(events: List[EarthquakeEvent],
                       min_distance_km: float = 0.1,
-                      max_distance_km: float = 1000.0) -> BearingAnalysisResult:
-    """Calculate bearings (convenience function)"""
-    analyzer = BearingAnalyzer()
-    return analyzer.analyze_bearings(events, min_distance_km, max_distance_km)
+                      max_distance_km: float = 1000.0,
+                      min_dtime_seconds: Optional[float] = None) -> DirectivityAnalysisResult:
+    """Calculate directivities (convenience function)"""
+    analyzer = DirectivityAnalyzer()
+    return analyzer.analyze_directivities(events, min_distance_km, max_distance_km,
+                                          min_dtime_seconds=min_dtime_seconds)

@@ -32,7 +32,13 @@ class BaseConfig:
     FIGURE_SIZE: Tuple[int, int] = (12, 8)
     DPI: int = 300
     FONT_SIZE: int = 12
-    COLOR_MAP: str = "viridis"
+    COLOR_MAP: str = "gist_rainbow"
+    # Temporal sliding ratio analysis
+    PEAK_HALF_WIDTH: int = 30
+    SLIDING_WINDOW_SIZES: List[float] = field(default_factory=lambda: [0.5, 1.0, 1.5, 2.0, 2.5])
+    SLIDING_TIME_STEP: float = 0.5
+    MIN_EVENTS_FOR_RATIO: int = 10
+    MIN_DTIME_SECONDS: float = 10.0  # filter out pairs with dtime < 10s (ping-pong filter)
 
 @dataclass
 class CatalogConfig:

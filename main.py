@@ -25,11 +25,13 @@ from catalog_reader import (
     CatalogReaderFactory, filter_events_by_magnitude, filter_events_by_time, EarthquakeEvent
 )
 from seismic_analyzer import (
-    analyze_seismicity_migration, calculate_bearings, BearingAnalysisResult, MigrationAnalysisResult
+    analyze_seismicity_migration, calculate_directivities, DirectivityAnalysisResult,
+    MigrationAnalysisResult, TemporalDirectivityResult, MigrationAnalyzer
 )
 from visualizer import (
-    plot_bearing_histogram, plot_polar_histogram, plot_epicenter_map,
-    create_analysis_dashboard, ComprehensiveVisualizer
+    plot_directivity_histogram, plot_polar_histogram, plot_epicenter_map,
+    create_analysis_dashboard, ComprehensiveVisualizer, DirectivityVisualizer,
+    plot_dtime_histogram, plot_speed_histogram, plot_dtime_evolution, plot_speed_evolution
 )
 from utils import convert_numpy_types
 
@@ -87,10 +89,22 @@ Examples:
                        help='End date (format: YYYY-MM-DD)')
 
     # Analysis types
-    parser.add_argument('--bearing-only', action='store_true',
-                       help='Execute bearing analysis only (this is the default)')
+    parser.add_argument('--directivity-only', action='store_true',
+                       help='Execute directivity analysis only (this is the default)')
     parser.add_argument('--full-analysis', action='store_true',
                        help='Execute full analysis including temporal, spatial, and magnitude analysis (slower)')
+    parser.add_argument('--temporal-ratio', action='store_true',
+                       help='Enable temporal sliding ratio analysis (N2/N1 ratio over time)')
+    parser.add_argument('--ratio-window-sizes', type=str, default=None,
+                       help='Comma-separated window sizes in days (e.g., "0.5,1.0,1.5,2.0,2.5")')
+    parser.add_argument('--ratio-time-step', type=float, default=None,
+                       help='Time step between windows in days (default: 0.5)')
+    parser.add_argument('--peak-half-width', type=int, default=None,
+                       help='Half-width of peak region in degrees (default: 30)')
+    parser.add_argument('--ratio-min-events', type=int, default=None,
+                       help='Minimum events in window for ratio calculation (default: 10)')
+    parser.add_argument('--min-dtime', type=float, default=None,
+                       help='Minimum inter-event time in seconds to filter concurrent pairs (default: 10, set 0 to disable)')
 
     # Visualization options
     parser.add_argument('--no-plots', action='store_true',
@@ -165,38 +179,56 @@ def _load_and_filter_events(input_file: str, args: argparse.Namespace) -> Option
         logger.info(f"Remaining {len(events)} events after time filtering")
 
     if len(events) < 2:
-        logger.warning("Insufficient events after filtering for bearing analysis")
+        logger.warning("Insufficient events after filtering for directivity analysis")
         return None
 
     return events
 
-def _run_analysis(events: List[EarthquakeEvent], args: argparse.Namespace) -> Tuple[Optional[BearingAnalysisResult], Optional[MigrationAnalysisResult]]:
+def _run_analysis(events: List[EarthquakeEvent], args: argparse.Namespace) -> Tuple[Optional[DirectivityAnalysisResult], Optional[MigrationAnalysisResult], Optional[TemporalDirectivityResult]]:
     """Runs the requested seismic analysis.
 
     Analysis modes:
-    - Default: bearing-only analysis (fast)
+    - Default: directivity-only analysis (fast)
     - --full-analysis: comprehensive analysis including temporal, spatial, and magnitude analysis
-    - --bearing-only: explicit bearing-only (same as default, provides clarity)
+    - --directivity-only: explicit directivity-only (same as default, provides clarity)
+    - --temporal-ratio: sliding window N2/N1 ratio analysis
     """
     logger.info("Executing seismic activity analysis...")
-    bearing_result: Optional[BearingAnalysisResult] = None
+    directivity_result: Optional[DirectivityAnalysisResult] = None
     analysis_result: Optional[MigrationAnalysisResult] = None
+    temporal_ratio_result: Optional[TemporalDirectivityResult] = None
 
     if args.full_analysis:
         logger.info("Executing comprehensive migration analysis...")
         analysis_result = analyze_seismicity_migration(events)
-        bearing_result = analysis_result.directional_analysis
+        directivity_result = analysis_result.directional_analysis
     else:
-        # Default: bearing-only analysis (fast path)
-        logger.info("Executing bearing analysis...")
-        bearing_result = calculate_bearings(events)
+        # Default: directivity-only analysis (fast path)
+        logger.info("Executing directivity analysis...")
+        min_dtime = args.min_dtime  # None → use config default (10s)
+        directivity_result = calculate_directivities(events, min_dtime_seconds=min_dtime)
 
-    return bearing_result, analysis_result
+    if args.temporal_ratio:
+        logger.info("Executing temporal sliding ratio analysis...")
+        window_sizes = None
+        if args.ratio_window_sizes:
+            window_sizes = [float(x.strip()) for x in args.ratio_window_sizes.split(',')]
+        analyzer = MigrationAnalyzer()
+        temporal_ratio_result = analyzer.temporal_directivity_ratio_analysis(
+            events,
+            window_sizes=window_sizes,
+            time_step=args.ratio_time_step,
+            peak_half_width=args.peak_half_width,
+            min_events=args.ratio_min_events,
+        )
+
+    return directivity_result, analysis_result, temporal_ratio_result
 
 def _generate_visualizations(
     events: List[EarthquakeEvent],
-    bearing_result: BearingAnalysisResult,
+    directivity_result: DirectivityAnalysisResult,
     analysis_result: Optional[MigrationAnalysisResult],
+    temporal_ratio_result: Optional[TemporalDirectivityResult],
     file_prefix: str,
     output_dir: str,
     args: argparse.Namespace
@@ -207,18 +239,18 @@ def _generate_visualizations(
     plot_format = args.plot_format
 
     try:
-        # 1. Bearing angle histogram
-        plot_bearing_histogram(
-            bearing_result,
-            title=f"Bearing Distribution - {file_prefix}",
-            save_filename=f"{file_prefix}_bearing_histogram.{plot_format}"
+        # 1. Directivity angle histogram
+        plot_directivity_histogram(
+            directivity_result,
+            title=f"Directivity Distribution - {file_prefix}",
+            save_filename=f"{file_prefix}_directivity_histogram.{plot_format}"
         )
-        visualizations.append(f"{file_prefix}_bearing_histogram.{plot_format}")
+        visualizations.append(f"{file_prefix}_directivity_histogram.{plot_format}")
 
         # 2. Polar plot
         plot_polar_histogram(
-            bearing_result,
-            title=f"Polar Bearing Distribution - {file_prefix}",
+            directivity_result,
+            title=f"Polar Directivity Distribution - {file_prefix}",
             save_filename=f"{file_prefix}_polar_histogram.{plot_format}"
         )
         visualizations.append(f"{file_prefix}_polar_histogram.{plot_format}")
@@ -243,14 +275,74 @@ def _generate_visualizations(
             except Exception as e:
                 logger.warning(f"Failed to generate analysis dashboard: {e}", exc_info=args.debug)
 
-        # 5. Interactive visualizations
+        # 5. Temporal ratio plots
+        if temporal_ratio_result:
+            try:
+                dv = DirectivityVisualizer()
+                # Ratio evolution plot
+                dv.plot_directivity_ratio_evolution(
+                    temporal_ratio_result,
+                    title=f"Directivity Ratio Evolution - {file_prefix}",
+                    save_filename=f"{file_prefix}_ratio_evolution.{plot_format}"
+                )
+                visualizations.append(f"{file_prefix}_ratio_evolution.{plot_format}")
+                # Histogram with peak region highlights (full catalog)
+                dv.plot_histogram_with_peak_regions(
+                    directivity_result,
+                    title=f"Directivity with Peak Regions - {file_prefix}",
+                    save_filename=f"{file_prefix}_peak_region_histogram.{plot_format}"
+                )
+                visualizations.append(f"{file_prefix}_peak_region_histogram.{plot_format}")
+                # Single best-window plot
+                dv.plot_single_window_ratio(
+                    temporal_ratio_result,
+                    title=f"Directivity Ratio (Best Window) - {file_prefix}",
+                    save_filename=f"{file_prefix}_ratio_single_window.{plot_format}"
+                )
+                visualizations.append(f"{file_prefix}_ratio_single_window.{plot_format}")
+            except Exception as e:
+                logger.warning(f"Failed to generate temporal ratio plots: {e}", exc_info=args.debug)
+
+        # 6. Dtime and speed histograms
+        try:
+            plot_dtime_histogram(
+                directivity_result,
+                title=f"Inter-event Time - {file_prefix}",
+                save_filename=f"{file_prefix}_dtime_histogram.{plot_format}"
+            )
+            visualizations.append(f"{file_prefix}_dtime_histogram.{plot_format}")
+
+            plot_speed_histogram(
+                directivity_result,
+                title=f"Migration Speed - {file_prefix}",
+                save_filename=f"{file_prefix}_speed_histogram.{plot_format}"
+            )
+            visualizations.append(f"{file_prefix}_speed_histogram.{plot_format}")
+
+            plot_dtime_evolution(
+                directivity_result,
+                title=f"SEP Inter-event Time vs. Time - {file_prefix}",
+                save_filename=f"{file_prefix}_dtime_evolution.{plot_format}"
+            )
+            visualizations.append(f"{file_prefix}_dtime_evolution.{plot_format}")
+
+            plot_speed_evolution(
+                directivity_result,
+                title=f"SEP Speed vs. Time - {file_prefix}",
+                save_filename=f"{file_prefix}_speed_evolution.{plot_format}"
+            )
+            visualizations.append(f"{file_prefix}_speed_evolution.{plot_format}")
+        except Exception as e:
+            logger.warning(f"Failed to generate dtime/speed histograms: {e}", exc_info=args.debug)
+
+        # 7. Interactive visualizations
         if args.interactive:
             logger.info("Generating interactive visualizations...")
             try:
                 comp_viz = ComprehensiveVisualizer()
                 if hasattr(comp_viz, 'interactive_viz'):
                     interactive_map = comp_viz.interactive_viz.create_interactive_map(events)
-                    interactive_hist = comp_viz.interactive_viz.create_interactive_histogram(bearing_result)
+                    interactive_hist = comp_viz.interactive_viz.create_interactive_histogram(directivity_result)
 
                     map_file = os.path.join(output_dir, f"{file_prefix}_interactive_map.html")
                     hist_file = os.path.join(output_dir, f"{file_prefix}_interactive_histogram.html")
@@ -274,8 +366,9 @@ def _generate_visualizations(
     return visualizations
 
 def _save_results(
-    bearing_result: BearingAnalysisResult,
+    directivity_result: DirectivityAnalysisResult,
     analysis_result: Optional[MigrationAnalysisResult],
+    temporal_ratio_result: Optional[TemporalDirectivityResult],
     events: List[EarthquakeEvent],
     output_dir: str,
     file_prefix: str,
@@ -288,12 +381,14 @@ def _save_results(
     serializable_results: Dict[str, Any] = {
         "input_file": f"{file_prefix}",
         "total_events_processed": len(events),
-        "analysis_type": "full_analysis" if args.full_analysis else "bearing_only",
-        "bearing_analysis": convert_numpy_types({
-            "total_pairs": bearing_result.statistics.get('total_pairs'),
-            "mean_bearing": bearing_result.statistics.get('mean_bearing'),
-            "std_bearing": bearing_result.statistics.get('std_bearing'),
-            "gaussian_fits": bearing_result.gaussian_fits if bearing_result.gaussian_fits else []
+        "analysis_type": "full_analysis" if args.full_analysis else "directivity_only",
+        "directivity_analysis": convert_numpy_types({
+            "total_pairs": directivity_result.statistics.get('total_pairs'),
+            "mean_directivity": directivity_result.statistics.get('mean_directivity'),
+            "std_directivity": directivity_result.statistics.get('std_directivity'),
+            "mean_dtime_seconds": directivity_result.statistics.get('mean_dtime_seconds'),
+            "mean_speed_kms": directivity_result.statistics.get('mean_speed_kms'),
+            "gaussian_fits": directivity_result.gaussian_fits if directivity_result.gaussian_fits else []
         })
     }
 
@@ -302,6 +397,13 @@ def _save_results(
             "dominant_directions": analysis_result.summary_statistics.get('dominant_directions'),
             "spatial_range": analysis_result.spatial_analysis.get('spatial_range'),
             "magnitude_stats": analysis_result.magnitude_analysis.get('magnitude_stats')
+        })
+
+    if temporal_ratio_result:
+        serializable_results["temporal_ratio_analysis"] = convert_numpy_types({
+            "window_sizes": temporal_ratio_result.window_sizes,
+            "mean_ratio_by_window": temporal_ratio_result.statistics.get('mean_ratio_by_window'),
+            "total_windows_computed": temporal_ratio_result.statistics.get('total_windows_computed'),
         })
 
     with open(results_file, 'w', encoding='utf-8') as f:
@@ -324,16 +426,19 @@ def process_single_file(input_file: str, output_dir: str, config: Config,
             return {"status": "warning", "message": "No valid events after filtering"}
 
         # 2. Execute analysis
-        bearing_result, analysis_result = _run_analysis(events, args)
-        if bearing_result is None:
+        directivity_result, analysis_result, temporal_ratio_result = _run_analysis(events, args)
+        if directivity_result is None:
             logger.warning("Analysis returned no results.")
             return {"status": "warning", "message": "Analysis completed with no results"}
 
         # 3. Generate visualizations
+        analysis_type = "full_analysis" if args.full_analysis else "directivity_only"
+        if args.temporal_ratio:
+            analysis_type += "_temporal_ratio"
         results: Dict[str, Any] = {
             "input_file": input_file,
             "total_events": len(events),
-            "analysis_type": "full_analysis" if args.full_analysis else "bearing_only",
+            "analysis_type": analysis_type,
             "visualizations": []
         }
 
@@ -342,7 +447,8 @@ def process_single_file(input_file: str, output_dir: str, config: Config,
         if not args.no_plots:
             try:
                 results["visualizations"] = _generate_visualizations(
-                    events, bearing_result, analysis_result, file_prefix, output_dir, args
+                    events, directivity_result, analysis_result, temporal_ratio_result,
+                    file_prefix, output_dir, args
                 )
             except Exception as e:
                 logger.error(f"Error during visualization: {e}")
@@ -350,7 +456,8 @@ def process_single_file(input_file: str, output_dir: str, config: Config,
 
         # 4. Save results
         results_file_path = _save_results(
-            bearing_result, analysis_result, events, output_dir, file_prefix, args
+            directivity_result, analysis_result, temporal_ratio_result,
+            events, output_dir, file_prefix, args
         )
         results["results_file"] = results_file_path
 

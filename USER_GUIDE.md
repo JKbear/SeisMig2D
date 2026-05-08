@@ -3,7 +3,7 @@
 ## Overview
 
 This tool analyzes seismic migration patterns in earthquake catalogs. It can:
-- Calculate bearing (azimuth) angles between earthquake pairs
+- Calculate directivity (azimuth) angles between earthquake pairs
 - Analyze temporal evolution of seismicity
 - Perform spatial and magnitude analysis
 - Detect dominant migration directions using Gaussian fitting
@@ -49,8 +49,8 @@ python main.py -i data/ --batch -o results/
 # Specify magnitude and time range filters
 python main.py -i data/earthquakes.csv -o results/ --min-mag 4.0 --start-date "2020-01-01" --end-date "2023-12-31"
 
-# Bearing analysis only (faster, no temporal analysis)
-python main.py -i data/earthquakes.csv -o results/ --bearing-only
+# Directivity analysis only (faster, no temporal analysis)
+python main.py -i data/earthquakes.csv -o results/ --directivity-only
 
 # Full analysis (including migration analysis)
 python main.py -i data/earthquakes.csv -o results/ --full-analysis
@@ -79,8 +79,18 @@ python main.py -i data/earthquakes.csv -o results/ --no-plots
 - `--end-date`: End date filter (format: YYYY-MM-DD)
 
 **Analysis Types:**
-- `--bearing-only`: Execute bearing analysis only
+- `--directivity-only`: Execute directivity analysis only
 - `--full-analysis`: Execute full analysis (including migration analysis)
+- `--temporal-ratio`: Enable temporal sliding window N2/N1 ratio analysis
+
+**Temporal Ratio Parameters:**
+- `--ratio-window-sizes`: Comma-separated window sizes in days (e.g., `"0.5,1.0,1.5,2.0,2.5"`)
+- `--ratio-time-step`: Time step between windows in days (default: 0.5)
+- `--peak-half-width`: Half-width of peak region in degrees (default: 30)
+- `--ratio-min-events`: Minimum events in window for ratio (default: 10)
+
+**Ping-pong Filter:**
+- `--min-dtime`: Minimum inter-event time in seconds (default: 10, set 0 to disable)
 
 **Visualization Options:**
 - `--no-plots`: Do not generate plots
@@ -126,25 +136,25 @@ print(f"Main migration directions: {results.summary_statistics['dominant_directi
 
 ### 3. Individual Analysis Components
 
-#### Bearing Analysis Only
+#### Directivity Analysis Only
 ```python
-from src.seismic_analyzer import calculate_bearings
+from src.seismic_analyzer import calculate_directivities
 
-bearing_results = calculate_bearings(
+directivity_results = calculate_directivities(
     events=events,
     min_distance_km=0.1,
     max_distance_km=1000.0
 )
 
-# Access bearing statistics
-stats = bearing_results.statistics
-print(f"Mean bearing: {stats['mean_bearing']:.1f}°")
+# Access directivity statistics
+stats = directivity_results.statistics
+print(f"Mean directivity: {stats['mean_directivity']:.1f}°")
 print(f"Circular standard deviation: {stats['circular_std']:.1f}°")
 print(f"Total pairs: {stats['total_pairs']}")
 
 # Access detected peaks and Gaussian fits
-print(f"Number of peaks: {len(bearing_results.peaks)}")
-print(f"Gaussian fits: {len(bearing_results.gaussian_fits)}")
+print(f"Number of peaks: {len(directivity_results.peaks)}")
+print(f"Gaussian fits: {len(directivity_results.gaussian_fits)}")
 ```
 
 #### Custom Analysis
@@ -265,7 +275,7 @@ results.summary_statistics = {
     },
     'dominant_directions': [                # Top 3 dominant directions
         {
-            'mean': float,                  # Mean bearing angle (degrees)
+            'mean': float,                  # Mean directivity angle (degrees)
             'std': float,                   # Standard deviation (degrees)
             'amplitude': float              # Gaussian amplitude
         },
@@ -330,9 +340,9 @@ results.magnitude_analysis = {
     'b_value_estimate': float               # Gutenberg-Richter b-value estimate
 }
 
-# Directional analysis (BearingAnalysisResult)
-results.directional_analysis = BearingAnalysisResult(
-    bearings=np.ndarray,                    # All calculated bearing angles (degrees)
+# Directional analysis (DirectivityAnalysisResult)
+results.directional_analysis = DirectivityAnalysisResult(
+    directivities=np.ndarray,                    # All calculated directivity angles (degrees)
     distances=np.ndarray,                   # Distances for each pair (km)
     weights=np.ndarray,                     # Weights for each pair
     histogram=np.ndarray,                   # Histogram counts
@@ -357,15 +367,15 @@ results.directional_analysis = BearingAnalysisResult(
         },
         ...
     ],
-    statistics={                            # Bearing statistics
+    statistics={                            # Directivity statistics
         'total_pairs': int,
         'mean_distance': float,
         'std_distance': float,
         'mean_weight': float,
         'n_peaks': int,
         'n_gaussian_fits': int,
-        'mean_bearing': float,
-        'std_bearing': float,
+        'mean_directivity': float,
+        'std_directivity': float,
         'circular_mean': float,             # Circular mean (degrees)
         'circular_std': float,              # Circular standard deviation
         'resultant_length': float           # Resultant vector length (0-1)
@@ -373,21 +383,21 @@ results.directional_analysis = BearingAnalysisResult(
 )
 ```
 
-### BearingAnalysisResult (Standalone)
+### DirectivityAnalysisResult (Standalone)
 
-When using `calculate_bearings()` separately:
+When using `calculate_directivities()` separately:
 
 ```python
-bearing_results = calculate_bearings(events)
+directivity_results = calculate_directivities(events)
 
 # Access attributes directly
-print(f"Number of pairs: {len(bearing_results.bearings)}")
-print(f"Mean bearing: {bearing_results.statistics['mean_bearing']:.1f}°")
-print(f"Detected {len(bearing_results.peaks)} peaks")
-print(f"Gaussian fits: {len(bearing_results.gaussian_fits)}")
+print(f"Number of pairs: {len(directivity_results.directivities)}")
+print(f"Mean directivity: {directivity_results.statistics['mean_directivity']:.1f}°")
+print(f"Detected {len(directivity_results.peaks)} peaks")
+print(f"Gaussian fits: {len(directivity_results.gaussian_fits)}")
 
 # Access individual Gaussian fits
-for i, fit in enumerate(bearing_results.gaussian_fits):
+for i, fit in enumerate(directivity_results.gaussian_fits):
     print(f"Direction {i+1}: {fit['mean']:.1f}° ± {fit['std']:.1f}°")
 ```
 
@@ -397,7 +407,7 @@ for i, fit in enumerate(bearing_results.gaussian_fits):
 - **B-value**: Gutenberg-Richter b-value estimate (seismic activity rate parameter)
 - **Spatial Density**: Events per square kilometer
 - **Circular Statistics**: Directional analysis metrics (circular mean, circular std, resultant length)
-- **Peak Detection**: Automatically detected peaks in bearing histogram
+- **Peak Detection**: Automatically detected peaks in directivity histogram
 - **Gaussian Fits**: Fitted Gaussian distributions for each detected peak
 
 ## Visualization
@@ -406,23 +416,23 @@ The tool provides comprehensive visualization functions for analysis results.
 
 ### Available Visualization Functions
 
-#### Bearing Visualizations
+#### Directivity Visualizations
 ```python
-from src.visualizer import plot_bearing_histogram, plot_polar_histogram
+from src.visualizer import plot_directivity_histogram, plot_polar_histogram
 
-# Cartesian bearing histogram with Gaussian fits
-plot_bearing_histogram(
-    bearing_results,
-    title="Bearing Distribution",
+# Cartesian directivity histogram with Gaussian fits
+plot_directivity_histogram(
+    directivity_results,
+    title="Directivity Distribution",
     show_gaussian_fits=True,
     show_statistics=True,
-    save_filename="bearing_histogram.svg"
+    save_filename="directivity_histogram.svg"
 )
 
-# Polar (circular) bearing histogram
+# Polar (circular) directivity histogram
 plot_polar_histogram(
-    bearing_results,
-    title="Polar Bearing Distribution",
+    directivity_results,
+    title="Polar Directivity Distribution",
     show_statistics=True,
     save_filename="polar_histogram.svg"
 )
@@ -437,7 +447,7 @@ plot_epicenter_map(
     events,
     title="Earthquake Epicenters",
     show_magnitude=True,
-    color_by_time=False,  # Set True to color by time instead of magnitude
+    color_by_directivity=True,  # Color by migration directivity (set False for magnitude coloring)
     save_filename="epicenter_map.svg"
 )
 ```
@@ -465,8 +475,8 @@ viz = ComprehensiveVisualizer()
 interactive_map = viz.interactive_viz.create_interactive_map(events)
 interactive_map.write_html("interactive_map.html")
 
-# Interactive bearing histogram
-interactive_hist = viz.interactive_viz.create_interactive_histogram(bearing_results)
+# Interactive directivity histogram
+interactive_hist = viz.interactive_viz.create_interactive_histogram(directivity_results)
 interactive_hist.write_html("interactive_histogram.html")
 ```
 
@@ -478,22 +488,22 @@ You can also access the raw data for custom visualizations:
 import matplotlib.pyplot as plt
 import numpy as np
 
-# Access bearing data
-bearings = bearing_results.bearings
-weights = bearing_results.weights
-bin_centers = bearing_results.bin_centers
-histogram = bearing_results.histogram
+# Access directivity data
+directivities = directivity_results.directivities
+weights = directivity_results.weights
+bin_centers = directivity_results.bin_centers
+histogram = directivity_results.histogram
 
 # Create custom plot
 plt.figure(figsize=(8, 6))
 plt.bar(bin_centers, histogram, width=10, alpha=0.7)
-plt.xlabel('Bearing (degrees)')
+plt.xlabel('Directivity (degrees)')
 plt.ylabel('Frequency')
 plt.title('Seismic Migration Directions')
 plt.show()
 
 # Plot Gaussian fits
-for fit in bearing_results.gaussian_fits:
+for fit in directivity_results.gaussian_fits:
     x = fit['x_data']
     y = fit['y_fit']
     plt.plot(x, y, 'r-', linewidth=2, label=f"μ={fit['mean']:.1f}°")
@@ -504,12 +514,21 @@ plt.show()
 ### Output Files
 
 When using command-line interface or saving visualizations:
-- `*_bearing_histogram.{format}`: Cartesian bearing histogram
-- `*_polar_histogram.{format}`: Polar bearing histogram  
+- `*_directivity_histogram.{format}`: Cartesian directivity histogram
+- `*_polar_histogram.{format}`: Polar directivity histogram  
 - `*_epicenter_map.{format}`: Epicenter distribution map
+- `*_dtime_histogram.{format}`: Inter-event time distribution
+- `*_speed_histogram.{format}`: Migration speed distribution
+- `*_dtime_evolution.{format}`: SEP dtime vs. time scatter plot
+- `*_speed_evolution.{format}`: SEP speed vs. time scatter plot
 - `*_analysis_dashboard.{format}`: Comprehensive analysis dashboard
 - `*_interactive_map.html`: Interactive epicenter map (if `--interactive` used)
-- `*_interactive_histogram.html`: Interactive bearing histogram (if `--interactive` used)
+- `*_interactive_histogram.html`: Interactive directivity histogram (if `--interactive` used)
+
+With `--temporal-ratio`:
+- `*_ratio_evolution.{format}`: Multi-window N2/N1 ratio evolution
+- `*_ratio_single_window.{format}`: Single best-window ratio plot
+- `*_peak_region_histogram.{format}`: Directivity histogram with peak region highlights
 
 Supported formats: `svg` (default), `pdf`, `png`
 
@@ -568,7 +587,7 @@ from src.config import get_config, Config
 config = get_config()
 
 # Modify configuration programmatically
-config.base.HIST_BINS = 72  # Use finer bins for bearing histogram
+config.base.HIST_BINS = 72  # Use finer bins for directivity histogram
 config.base.GAUSSIAN_PEAK_THRESHOLD = 0.2  # Lower threshold for more peaks
 config.base.FIGURE_SIZE = (16, 10)  # Larger figures
 
@@ -618,13 +637,81 @@ from src.catalog_reader import filter_events_by_magnitude
 # Only analyze significant events
 significant_events = filter_events_by_magnitude(events, min_mag=3.0)
 
-# Use bearing-only analysis for faster processing
-bearing_results = calculate_bearings(
+# Use directivity-only analysis for faster processing
+directivity_results = calculate_directivities(
     significant_events,
     min_distance_km=1.0,    # Increase minimum distance
     max_distance_km=100.0    # Decrease maximum distance
 )
 ```
+
+### Temporal Sliding Ratio Analysis (N2/N1)
+
+Compute N2/N1 ratio evolution over time using sliding windows:
+
+```python
+from src.seismic_analyzer import MigrationAnalyzer
+
+analyzer = MigrationAnalyzer()
+ratio_result = analyzer.temporal_directivity_ratio_analysis(
+    events,
+    window_sizes=[0.5, 1.0, 1.5, 2.0, 2.5],  # days
+    time_step=0.5,   # days between windows
+    peak_half_width=30,  # degrees around peak center
+    min_events=10,   # minimum pairs per window
+)
+
+# Visualize
+from src.visualizer import DirectivityVisualizer
+dv = DirectivityVisualizer()
+dv.plot_directivity_ratio_evolution(ratio_result)
+dv.plot_single_window_ratio(ratio_result)  # best window only
+dv.plot_histogram_with_peak_regions(directivity_result)
+```
+
+CLI equivalent:
+```bash
+python main.py -i data/catalog.txt --temporal-ratio \
+  --ratio-window-sizes "0.5,1.0,1.5,2.0,2.5" \
+  --ratio-time-step 0.5 \
+  --peak-half-width 30
+```
+
+### SEP Dtime & Speed Analysis
+
+Inter-event time and migration speed for sequential event pairs:
+
+```python
+# Access dtime and speed from analysis result
+result = calculate_directivities(events)
+print(f"Mean dtime: {result.statistics['mean_dtime_seconds']:.0f} s")
+print(f"Mean speed: {result.statistics['mean_speed_kms']:.5f} km/s")
+
+# Visualize
+from src.visualizer import plot_dtime_histogram, plot_speed_histogram
+from src.visualizer import plot_dtime_evolution, plot_speed_evolution
+
+plot_dtime_histogram(result)       # distribution
+plot_speed_histogram(result)       # distribution
+plot_dtime_evolution(result)       # dtime vs. time scatter
+plot_speed_evolution(result)       # speed vs. time scatter
+```
+
+### Ping-pong Filter
+
+Remove concurrent event pairs (dtime < threshold) to reduce
+spurious long-distance vectors from alternating sub-clusters:
+
+```python
+# API: set min_dtime_seconds
+result = calculate_directivities(events, min_dtime_seconds=10)
+
+# CLI: --min-dtime flag
+python main.py -i data/catalog.txt --min-dtime 10
+```
+
+Default threshold is 10 seconds. Set to 0 to disable.
+See `docs/SEP_physical_interpretation.md` for detailed discussion.
 
 ## Troubleshooting
 
@@ -661,13 +748,13 @@ bearing_results = calculate_bearings(
    - Use magnitude filtering to reduce event count
    - Adjust distance ranges to reduce pair calculations
    - Process in smaller time windows
-   - Consider using `--bearing-only` for faster analysis
+   - Consider using `--directivity-only` for faster analysis
 
 ### Performance Tips
 
 - **Use appropriate distance ranges**: Too wide ranges increase computation time (O(n²) pairs)
 - **Filter events early**: Apply magnitude/time filters before analysis
-- **Use bearing-only mode**: Skip temporal analysis if not needed (`--bearing-only`)
+- **Use directivity-only mode**: Skip temporal analysis if not needed (`--directivity-only`)
 - **Batch processing**: Process multiple files efficiently with `--batch` mode
 - **Configuration**: Adjust histogram bins and peak detection thresholds based on your needs
 
