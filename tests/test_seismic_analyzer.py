@@ -46,15 +46,15 @@ class TestDirectivityAnalyzer:
             assert 'peak_heights' in peak_properties
             assert 'peak_positions' in peak_properties
 
-    def test_fit_gaussians(self, sample_events):
+    def test_fit_vonmises_mixture(self, sample_events):
         analyzer = DirectivityAnalyzer()
         directivities, _, _, _, _, _ = analyzer.calculate_event_pairs(sample_events)
         if len(directivities) > 0:
             histogram, _, bin_centers = analyzer.create_histogram(directivities)
             peaks, _ = analyzer.detect_peaks(histogram, bin_centers)
             if len(peaks) > 0:
-                fits = analyzer.fit_gaussians(histogram, bin_centers, peaks)
-                # Gaussian fitting may fail for small datasets - just verify it runs
+                fits = analyzer.fit_vonmises_mixture(histogram, bin_centers, peaks)
+                # vMMM fitting may fail for small datasets - just verify it runs
                 assert isinstance(fits, list)
 
     def test_analyze_directivities(self, sample_events):

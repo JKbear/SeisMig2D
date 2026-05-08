@@ -42,8 +42,15 @@ logger = logging.getLogger(__name__)
 
 
 def _gaussian(x: np.ndarray, amplitude: float, mean: float, std: float) -> np.ndarray:
-    """Gaussian function used across histogram/polar plots."""
+    """Gaussian function — kept for backward compatibility."""
     return amplitude * np.exp(-((x - mean) ** 2) / (2 * std ** 2))
+
+
+def _vonmises_curve(x: np.ndarray, amplitude: float, mean: float,
+                    kappa: float) -> np.ndarray:
+    """Von Mises curve scaled to histogram counts. x in degrees."""
+    # Normalised von Mises without I₀: peak = amplitude at x=mean
+    return amplitude * np.exp(kappa * (np.cos(np.radians(x - mean)) - 1.0))
 
 
 class BaseVisualizer:
@@ -113,7 +120,10 @@ class DirectivityVisualizer(BaseVisualizer):
             x_smooth = np.linspace(0, 360, 1000)
 
             for i, fit in enumerate(analysis_result.gaussian_fits):
-                y_smooth = _gaussian(x_smooth, fit['amplitude'], fit['mean'], fit['std'])
+                if 'kappa' in fit:
+                    y_smooth = _vonmises_curve(x_smooth, fit['amplitude'], fit['mean'], fit['kappa'])
+                else:
+                    y_smooth = _gaussian(x_smooth, fit['amplitude'], fit['mean'], fit['std'])
                 gauss_label = 'Fitted Gaussian Curves' if i == 0 else None
                 ax.plot(x_smooth, y_smooth, color='red', linestyle='--', linewidth=2,
                        label=gauss_label)
@@ -192,14 +202,15 @@ class DirectivityVisualizer(BaseVisualizer):
 
         # ax.set_title(title, fontsize=14, fontweight='bold', pad=28)
 
-        # Gaussian fits: red dashed curves with annotations
+        # von Mises mixture fits: red dashed curves with annotations
         if analysis_result.gaussian_fits:
-            def gaussian(x: np.ndarray, amplitude: float, mean: float, std: float) -> np.ndarray:
-                return amplitude * np.exp(-((x - mean) ** 2) / (2 * std ** 2))
-
             x_range = np.linspace(0, 2 * np.pi, 1000)
+            x_deg = np.degrees(x_range)
             for fit in analysis_result.gaussian_fits:
-                fitted_curve = gaussian(np.degrees(x_range), fit['amplitude'], fit['mean'], fit['std'])
+                if 'kappa' in fit:
+                    fitted_curve = _vonmises_curve(x_deg, fit['amplitude'], fit['mean'], fit['kappa'])
+                else:
+                    fitted_curve = _gaussian(x_deg, fit['amplitude'], fit['mean'], fit['std'])
                 ax.plot(x_range, fitted_curve, 'r--', linewidth=2)
                 ax.text(np.radians(fit['mean']), ax.get_ylim()[1] * 0.85,
                        f'Mean: {fit["mean"]:.0f}°\nStd: {fit["std"]:.2f}',
@@ -334,7 +345,10 @@ class DirectivityVisualizer(BaseVisualizer):
         if analysis_result.gaussian_fits:
             x_smooth = np.linspace(0, 360, 1000)
             for i, fit in enumerate(analysis_result.gaussian_fits):
-                y_smooth = _gaussian(x_smooth, fit['amplitude'], fit['mean'], fit['std'])
+                if 'kappa' in fit:
+                    y_smooth = _vonmises_curve(x_smooth, fit['amplitude'], fit['mean'], fit['kappa'])
+                else:
+                    y_smooth = _gaussian(x_smooth, fit['amplitude'], fit['mean'], fit['std'])
                 gauss_label = 'Fitted Gaussian Curves' if i == 0 else None
                 ax.plot(x_smooth, y_smooth, color='red', linestyle='--', linewidth=2,
                        label=gauss_label)
@@ -944,7 +958,10 @@ class InteractiveVisualizer:
             x_smooth = np.linspace(0, 360, 1000)
 
             for i, fit in enumerate(analysis_result.gaussian_fits):
-                y_smooth = _gaussian(x_smooth, fit['amplitude'], fit['mean'], fit['std'])
+                if 'kappa' in fit:
+                    y_smooth = _vonmises_curve(x_smooth, fit['amplitude'], fit['mean'], fit['kappa'])
+                else:
+                    y_smooth = _gaussian(x_smooth, fit['amplitude'], fit['mean'], fit['std'])
 
                 fig.add_trace(go.Scatter(
                     x=x_smooth,

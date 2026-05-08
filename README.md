@@ -11,11 +11,18 @@ SeismicityMigration is a scientific computing tool for analyzing seismic activit
 - Automatic format detection and parsing
 - Data validation and quality control
 
-### 📊 Azimuth Analysis
-- Calculate azimuth angles and distances between earthquake event pairs
-- Generate azimuth histograms and polar plots
-- Automatically detect dominant migration directions
-- Gaussian fitting for peak detection
+### 📊 Directional Analysis
+- Calculate directivity angles and distances between earthquake event pairs
+- Von Mises Mixture Model (vMMM) fitting for circular data
+- Circular statistics (mean direction, concentration κ)
+- Automatic peak detection and multi-component fitting
+
+### 🔬 Statistical Modeling (NEW 2026-05-09)
+- **Von Mises Mixture Model (vMMM)**: replaces single-Gaussian-per-peak with global K-component mixture
+- Proper handling of circular topology (0° = 360°)
+- Simultaneous fitting of all components via L-BFGS-B optimisation
+- κ (concentration) and σ-equivalent per component
+- SEP inter-event time & speed physical interpretation: [docs/SEP_physical_interpretation.md](docs/SEP_physical_interpretation.md)
 
 ### 🗺️ Spatial Analysis
 - Epicenter distribution visualization
@@ -342,7 +349,19 @@ SeismicityMigration: A Python Tool for Earthquake Migration Analysis
 
 ## Changelog
 
-### v4.0.0 (Current Version)
+### v4.1.0 (2026-05-09)
+- 🔬 **von Mises Mixture Model**: replace per-peak Gaussian with K-component vMMM for circular data
+- 🔀 **Temporal ratio analysis**: sliding-window N2/N1 ratio with 95% CI, multi-window comparison
+- ⚡ **SEP dtime & speed**: inter-event time and migration speed per pair, histograms + evolution plots
+- 🛡️ **Ping-pong filter**: `--min-dtime` flag removes concurrent event pairs (default 10s)
+- 📊 **Peak region histograms**: blue/red fill_between highlights, N2/N1 ratio annotations
+- 🎨 **Visual overhaul**: gist_rainbow colormap, white background, black borders, dashed grids
+- 🏷️ **Naming**: bearing → directivity throughout codebase
+- 📝 **Documentation**: [SEP physical interpretation](docs/SEP_physical_interpretation.md), CLAUDE.md, updated README & USER_GUIDE
+- 🧹 **Code quality**: extract _gaussian, combine filter masks, searchsorted optimization, remove dead code
+- 📦 **Data**: fixed-format catalogs for Wenchuan (HuangWuFang & ChenJiuhui), Changning, Ridgecrest, Turkey
+
+### v4.0.0
 - 🔧 Default mode changed to directivity-only (fast path); use `--full-analysis` for comprehensive analysis
 - 🐛 Fixed b-value estimation (5th percentile Mc, Aki-Utsu MLE method)
 - 🐛 Fixed save_figure file extension bug

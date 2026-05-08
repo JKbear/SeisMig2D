@@ -10,7 +10,8 @@ import logging
 from typing import List, Tuple, Optional, Dict, Any
 from dataclasses import dataclass, field
 from datetime import datetime
-from scipy.optimize import curve_fit
+from scipy.optimize import minimize
+from scipy.special import ive  # modified Bessel function I₀
 import warnings
 
 try:
@@ -231,51 +232,125 @@ class DirectivityAnalyzer:
 
         return np.array(widths)
 
-    def fit_gaussians(self, histogram: np.ndarray, bin_centers: np.ndarray,
-                     peaks: np.ndarray) -> List[Dict[str, Any]]:
-        """Fit Gaussian distributions to peaks"""
-        gaussian_fits: List[Dict[str, Any]] = []
+    def fit_vonmises_mixture(self, histogram: np.ndarray, bin_centers: np.ndarray,
+                             peaks: np.ndarray) -> List[Dict[str, Any]]:
+        """Fit a von Mises Mixture Model (vMMM) to the directivity histogram.
 
-        def gaussian(x: np.ndarray, amplitude: float, mean: float, std: float) -> np.ndarray:
-            return amplitude * np.exp(-((x - mean) ** 2) / (2 * std ** 2))
+        Fits K components simultaneously to the full histogram, where K is the
+        number of detected peaks. Uses L-BFGS-B optimisation with bounds.
+        """
+        K = len(peaks)
+        if K == 0:
+            return []
 
-        for i, peak in enumerate(peaks):
-            try:
-                window_size = 10
-                start_idx = max(0, peak - window_size)
-                end_idx = min(len(histogram), peak + window_size + 1)
+        # Convert bin centres to radians for fitting
+        theta_rad = np.radians(bin_centers)
+        y = histogram.astype(np.float64)
+        y_sum = y.sum()
+        if y_sum == 0:
+            return []
+        y_norm = y / y_sum  # normalise to PDF scale
 
-                x_data = bin_centers[start_idx:end_idx]
-                y_data = histogram[start_idx:end_idx]
+        # --- von Mises PDF ---
+        def vm_pdf(theta, mu_deg, kappa):
+            """Von Mises PDF. theta and mu_deg in degrees, kappa >= 0."""
+            # ive(0, kappa) = I₀(kappa) * exp(-kappa), avoids overflow
+            return np.exp(kappa * (np.cos(np.radians(theta - mu_deg)) - 1.0)) / (
+                2.0 * np.pi * ive(0, kappa))
 
-                initial_amplitude = histogram[peak]
-                initial_mean = bin_centers[peak]
-                initial_std = 10.0
+        # --- Loss function ---
+        def neg_log_likelihood(params):
+            """Negative log-likelihood of von Mises mixture."""
+            mus = params[:K]
+            kappas = params[K:2*K]
+            # weights: first K-1 free, last one constrained
+            w_free = params[2*K:3*K-1]
+            w = np.zeros(K)
+            w[:K-1] = w_free
+            w[-1] = 1.0 - w_free.sum()
+            if w[-1] <= 0:
+                return 1e12
 
-                initial_params = [initial_amplitude, initial_mean, initial_std]
+            pdf = np.zeros_like(y_norm)
+            for k in range(K):
+                pdf += w[k] * vm_pdf(bin_centers, mus[k], kappas[k])
+            pdf = np.maximum(pdf, 1e-300)
+            return -np.sum(y_norm * np.log(pdf))
 
-                popt, pcov = curve_fit(gaussian, x_data, y_data, p0=initial_params)
+        # --- Initial guesses ---
+        peak_heights = y[peaks].astype(np.float64)
+        total_height = peak_heights.sum()
+        init_weights = peak_heights / total_height  # normalise to sum to 1
 
-                y_fit = gaussian(x_data, *popt)
-                r_squared = self._calculate_r_squared(y_data, y_fit)
+        init_mus = np.array([bin_centers[p] for p in peaks], dtype=np.float64)
+        init_kappas = np.full(K, 10.0)  # moderate concentration
 
-                fit_result: Dict[str, Any] = {
-                    'amplitude': popt[0],
-                    'mean': popt[1],
-                    'std': abs(popt[2]),
-                    'r_squared': r_squared,
-                    'peak_index': int(peak),
-                    'x_data': x_data,
-                    'y_data': y_data,
-                    'y_fit': y_fit
-                }
-                gaussian_fits.append(fit_result)
+        # Parameter vector: [mus (K), kappas (K), weights (K-1)]
+        init_params = np.concatenate([init_mus, init_kappas, init_weights[:-1]])
 
-            except Exception as e:
-                logger.warning(f"Gaussian fitting failed for peak {i} at {bin_centers[peak]:.1f}: {e}")
-                continue
+        # Bounds: mu ∈ [0, 360], kappa ∈ [0.1, 200], w ∈ [0.01, 0.99]
+        bounds = ([(0.0, 360.0)] * K +
+                  [(0.1, 200.0)] * K +
+                  [(0.01, 0.99)] * (K - 1))
 
-        return gaussian_fits
+        try:
+            result = minimize(neg_log_likelihood, init_params, method='L-BFGS-B',
+                            bounds=bounds, options={'maxiter': 500, 'disp': False})
+            if not result.success:
+                logger.warning(f"vMMM optimisation did not converge: {result.message}")
+                return []
+
+            mus_opt = result.x[:K]
+            kappas_opt = result.x[K:2*K]
+            w_free_opt = result.x[2*K:3*K-1]
+            w_opt = np.zeros(K)
+            w_opt[:K-1] = w_free_opt
+            w_opt[-1] = 1.0 - w_free_opt.sum()
+
+            # Build fit results (keep compatible structure)
+            vm_fits: List[Dict[str, Any]] = []
+            # Sort by weight descending
+            order = np.argsort(-w_opt)
+            for rank, idx in enumerate(order):
+                # Compute σ-equivalent for compatibility: σ ≈ 1/√κ (degrees)
+                if kappas_opt[idx] > 0.01:
+                    sigma_equiv = np.degrees(1.0 / np.sqrt(kappas_opt[idx]))
+                else:
+                    sigma_equiv = 90.0
+
+                # Peak bin height: take histogram value at bin nearest the fitted mean
+                closest_bin = int(np.argmin(np.abs(bin_centers - mus_opt[idx])))
+                peak_amplitude = float(y[closest_bin])
+
+                # R² on the full histogram for this component
+                y_pred = w_opt[idx] * vm_pdf(bin_centers, mus_opt[idx], kappas_opt[idx]) * y_sum
+                r_squared = self._calculate_r_squared(y.astype(np.float64), y_pred)
+
+                # Full mixture prediction for this component
+                mixture_y = np.zeros_like(y_norm)
+                for k in range(K):
+                    mixture_y += w_opt[k] * vm_pdf(bin_centers, mus_opt[k], kappas_opt[k])
+                mixture_y_full = mixture_y * y_sum
+
+                vm_fits.append({
+                    'amplitude': peak_amplitude,
+                    'weight': float(w_opt[idx]),
+                    'mean': float(mus_opt[idx]),
+                    'std': float(sigma_equiv),
+                    'kappa': float(kappas_opt[idx]),
+                    'r_squared': float(r_squared),
+                    'peak_index': int(peaks[idx]),
+                    'x_data': bin_centers,
+                    'y_data': y,
+                    'y_fit': mixture_y_full,
+                    'model': 'von_mises_mixture',
+                })
+
+            return vm_fits
+
+        except Exception as e:
+            logger.warning(f"von Mises mixture fitting failed: {e}")
+            return []
 
     def _calculate_r_squared(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         """Calculate R² coefficient of determination"""
@@ -305,7 +380,7 @@ class DirectivityAnalyzer:
 
         histogram, bin_edges, bin_centers = self.create_histogram(directivities, weights)
         peaks, peak_properties = self.detect_peaks(histogram, bin_centers)
-        gaussian_fits = self.fit_gaussians(histogram, bin_centers, peaks)
+        gaussian_fits = self.fit_vonmises_mixture(histogram, bin_centers, peaks)
 
         # Calculate statistics
         stats_data = stats_calc.calculate_circular_statistics(directivities)
