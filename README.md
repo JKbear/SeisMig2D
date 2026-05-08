@@ -66,7 +66,7 @@ SeisMig2D/
 │   ├── config.py                # Configuration management
 │   ├── utils.py                 # Utility functions (coordinate conversion, validation, statistics)
 │   ├── catalog_reader.py        # Earthquake catalog readers (CSV and fixed-format text)
-│   ├── seismic_analyzer.py      # Core analysis (directivity, histogram, peaks, Gaussian fitting)
+│   ├── seismic_analyzer.py      # Core analysis (directivity, histogram, peaks, von Mises fitting)
 │   ├── visualizer.py            # Matplotlib + Plotly visualizations
 ├── data/                        # Sample data files
 ├── figures/                     # Output figures directory
@@ -254,11 +254,13 @@ Using spherical trigonometry to calculate the azimuth between two earthquake eve
 θ = atan2(sin(Δλ) * cos(φ2), cos(φ1) * sin(φ2) - sin(φ1) * cos(φ2) * cos(Δλ))
 ```
 
-### Gaussian Fitting
-Using nonlinear least squares method to fit Gaussian functions:
+### Von Mises Mixture Model (vMMM)
+Global K-component von Mises mixture fitted via L-BFGS-B optimisation:
 ```
-f(x) = A * exp(-(x-μ)²/(2σ²))
+p(θ) = Σ w_k · exp(κ_k · cos(θ - μ_k)) / (2π · I₀(κ_k))
 ```
+Properly handles circular topology (0° = 360°). Each component returns
+mean direction μ, concentration κ, weight w, and σ-equivalent.
 
 ### Peak Detection
 Using the `peakutils` library to automatically detect peaks in histograms, supporting multiple detection algorithms.
