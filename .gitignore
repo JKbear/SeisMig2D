@@ -50,11 +50,11 @@ env/
 # Logs
 *.log
 
-# Output figures (generated at runtime)
-figures/*.png
-figures/*.svg
-figures/*.pdf
-figures/*.html
+# Output directories (generated at runtime / work in progress, not tracked)
+data/
+docs/
+figures/
+output/
 
 # OS
 .DS_Store

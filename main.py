@@ -95,10 +95,15 @@ Examples:
                        help='Execute full analysis including temporal, spatial, and magnitude analysis (slower)')
     parser.add_argument('--temporal-ratio', action='store_true',
                        help='Enable temporal sliding ratio analysis (N2/N1 ratio over time)')
+    parser.add_argument('--cumulative', action='store_true',
+                       help='Use cumulative window mode (window always starts from first event, '
+                            'grows by --cumulative-step). Overrides sliding behaviour of --temporal-ratio.')
     parser.add_argument('--ratio-window-sizes', type=str, default=None,
-                       help='Comma-separated window sizes in days (e.g., "0.5,1.0,1.5,2.0,2.5")')
+                       help='Comma-separated window sizes in days (sliding mode only, e.g., "0.5,1.0,1.5,2.0,2.5")')
     parser.add_argument('--ratio-time-step', type=float, default=None,
-                       help='Time step between windows in days (default: 0.5)')
+                       help='Time step between windows in days (sliding mode, default: 0.5)')
+    parser.add_argument('--cumulative-step', type=float, default=None,
+                       help='Window growth step in days (cumulative mode only, default: 1.0)')
     parser.add_argument('--peak-half-width', type=int, default=None,
                        help='Half-width of peak region in degrees (default: 30)')
     parser.add_argument('--ratio-min-events', type=int, default=None,
@@ -208,19 +213,29 @@ def _run_analysis(events: List[EarthquakeEvent], args: argparse.Namespace) -> Tu
         min_dtime = args.min_dtime  # None → use config default (10s)
         directivity_result = calculate_directivities(events, min_dtime_seconds=min_dtime)
 
-    if args.temporal_ratio:
-        logger.info("Executing temporal sliding ratio analysis...")
-        window_sizes = None
-        if args.ratio_window_sizes:
-            window_sizes = [float(x.strip()) for x in args.ratio_window_sizes.split(',')]
+    if args.temporal_ratio or args.cumulative:
         analyzer = MigrationAnalyzer()
-        temporal_ratio_result = analyzer.temporal_directivity_ratio_analysis(
-            events,
-            window_sizes=window_sizes,
-            time_step=args.ratio_time_step,
-            peak_half_width=args.peak_half_width,
-            min_events=args.ratio_min_events,
-        )
+        if args.cumulative:
+            logger.info("Executing cumulative window ratio analysis...")
+            step = args.cumulative_step  # None -> use config default
+            temporal_ratio_result = analyzer.cumulative_directivity_ratio_analysis(
+                events,
+                time_step=step,
+                peak_half_width=args.peak_half_width,
+                min_events=args.ratio_min_events,
+            )
+        else:
+            logger.info("Executing sliding window ratio analysis...")
+            window_sizes = None
+            if args.ratio_window_sizes:
+                window_sizes = [float(x.strip()) for x in args.ratio_window_sizes.split(',')]
+            temporal_ratio_result = analyzer.temporal_directivity_ratio_analysis(
+                events,
+                window_sizes=window_sizes,
+                time_step=args.ratio_time_step,
+                peak_half_width=args.peak_half_width,
+                min_events=args.ratio_min_events,
+            )
 
     return directivity_result, analysis_result, temporal_ratio_result
 
@@ -243,7 +258,8 @@ def _generate_visualizations(
         plot_directivity_histogram(
             directivity_result,
             title=f"Directivity Distribution - {file_prefix}",
-            save_filename=f"{file_prefix}_directivity_histogram.{plot_format}"
+            save_filename=f"{file_prefix}_directivity_histogram.{plot_format}",
+            output_dir="",
         )
         visualizations.append(f"{file_prefix}_directivity_histogram.{plot_format}")
 
@@ -251,7 +267,8 @@ def _generate_visualizations(
         plot_polar_histogram(
             directivity_result,
             title=f"Polar Directivity Distribution - {file_prefix}",
-            save_filename=f"{file_prefix}_polar_histogram.{plot_format}"
+            save_filename=f"{file_prefix}_polar_histogram.{plot_format}",
+            output_dir="",
         )
         visualizations.append(f"{file_prefix}_polar_histogram.{plot_format}")
 
@@ -259,7 +276,8 @@ def _generate_visualizations(
         plot_epicenter_map(
             events,
             title=f"Earthquake Epicenters - {file_prefix}",
-            save_filename=f"{file_prefix}_epicenter_map.{plot_format}"
+            save_filename=f"{file_prefix}_epicenter_map.{plot_format}",
+            output_dir="",
         )
         visualizations.append(f"{file_prefix}_epicenter_map.{plot_format}")
 
@@ -269,7 +287,8 @@ def _generate_visualizations(
                 create_analysis_dashboard(
                     events, analysis_result,
                     title=f"Seismicity Migration Analysis - {file_prefix}",
-                    save_filename=f"{file_prefix}_analysis_dashboard.{plot_format}"
+                    save_filename=f"{file_prefix}_analysis_dashboard.{plot_format}",
+                    output_dir="",
                 )
                 visualizations.append(f"{file_prefix}_analysis_dashboard.{plot_format}")
             except Exception as e:
@@ -308,28 +327,32 @@ def _generate_visualizations(
             plot_dtime_histogram(
                 directivity_result,
                 title=f"Inter-event Time - {file_prefix}",
-                save_filename=f"{file_prefix}_dtime_histogram.{plot_format}"
+                save_filename=f"{file_prefix}_dtime_histogram.{plot_format}",
+                output_dir="",
             )
             visualizations.append(f"{file_prefix}_dtime_histogram.{plot_format}")
 
             plot_speed_histogram(
                 directivity_result,
                 title=f"Migration Speed - {file_prefix}",
-                save_filename=f"{file_prefix}_speed_histogram.{plot_format}"
+                save_filename=f"{file_prefix}_speed_histogram.{plot_format}",
+                output_dir="",
             )
             visualizations.append(f"{file_prefix}_speed_histogram.{plot_format}")
 
             plot_dtime_evolution(
                 directivity_result,
                 title=f"SEP Inter-event Time vs. Time - {file_prefix}",
-                save_filename=f"{file_prefix}_dtime_evolution.{plot_format}"
+                save_filename=f"{file_prefix}_dtime_evolution.{plot_format}",
+                output_dir="",
             )
             visualizations.append(f"{file_prefix}_dtime_evolution.{plot_format}")
 
             plot_speed_evolution(
                 directivity_result,
                 title=f"SEP Speed vs. Time - {file_prefix}",
-                save_filename=f"{file_prefix}_speed_evolution.{plot_format}"
+                save_filename=f"{file_prefix}_speed_evolution.{plot_format}",
+                output_dir="",
             )
             visualizations.append(f"{file_prefix}_speed_evolution.{plot_format}")
         except Exception as e:
@@ -401,6 +424,7 @@ def _save_results(
 
     if temporal_ratio_result:
         serializable_results["temporal_ratio_analysis"] = convert_numpy_types({
+            "mode": getattr(temporal_ratio_result, 'mode', 'sliding'),
             "window_sizes": temporal_ratio_result.window_sizes,
             "mean_ratio_by_window": temporal_ratio_result.statistics.get('mean_ratio_by_window'),
             "total_windows_computed": temporal_ratio_result.statistics.get('total_windows_computed'),
@@ -433,7 +457,9 @@ def process_single_file(input_file: str, output_dir: str, config: Config,
 
         # 3. Generate visualizations
         analysis_type = "full_analysis" if args.full_analysis else "directivity_only"
-        if args.temporal_ratio:
+        if args.cumulative:
+            analysis_type += "_cumulative_ratio"
+        elif args.temporal_ratio:
             analysis_type += "_temporal_ratio"
         results: Dict[str, Any] = {
             "input_file": input_file,

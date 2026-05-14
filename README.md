@@ -35,10 +35,11 @@ SeismicityMigration is a scientific computing tool for analyzing seismic activit
 - Time window analysis
 
 ### 🔀 Temporal Ratio Analysis (NEW)
-- Sliding-window N2/N1 ratio evolution
+- **Sliding-window** N2/N1 ratio evolution with multi-window comparison
+- **Cumulative-window** ratio convergence from first event (natural smoothing)
 - Peak region counting and ratio calculation
 - 95% confidence interval under null hypothesis
-- Multi-window comparison with log-scale plots
+- Log-scale ratio evolution plots
 
 ### ⚡ SEP Dtime & Speed Analysis (NEW)
 - Inter-event time (dtime) statistics per pair
@@ -50,8 +51,10 @@ SeismicityMigration is a scientific computing tool for analyzing seismic activit
 - Static graphics: histograms, polar plots, epicenter distribution maps
 - Interactive visualizations (requires Plotly)
 - Comprehensive analysis dashboard
-- Support for multiple output formats (SVG, PDF, PNG)
+- Multi-format export: SVG (editable text), PDF (vector), TIFF (600 DPI raster)
 - 10+ plot types including ratio evolution, peak region histograms, dtime/speed evolution
+- Publication-ready design: Arial/Helvetica fonts, top/right spine removal, consistent dashed grid lines
+- Directional colorbar with cardinal degree labels (E/N/W/S on polar plots)
 
 ### 🤖 Machine Learning (planned)
 - Seismic activity pattern recognition
@@ -131,8 +134,14 @@ python main.py -i data/earthquakes.csv -o results/ --min-mag 4.0 --start-date "2
 python main.py -i data/earthquakes.csv -o results/ --full-analysis
 
 # Temporal sliding ratio analysis (N2/N1 ratio over time)
-python main.py -i data/earthquakes.csv -o results/ --temporal-ratio
-python main.py -i data/earthquakes.csv -o results/ --temporal-ratio --ratio-window-sizes "7,30,60,90,120" --ratio-time-step 1
+# window_sizes: temporal window length (how much data per window)
+# time_step: step between consecutive windows (how much the window moves)
+python main.py -i data/earthquakes.csv -o results/ --temporal-ratio \
+  --ratio-window-sizes "7,30,60,90,120" --ratio-time-step 1
+
+# Cumulative ratio analysis (window always starts from first event, grows over time)
+# cum-step: daily growth increment
+python main.py -i data/earthquakes.csv -o results/ --cumulative --cumulative-step 1.0
 
 # Filter concurrent event pairs (ping-pong effect)
 python main.py -i data/earthquakes.csv -o results/ --min-dtime 10
@@ -157,11 +166,17 @@ python main.py -i data/earthquakes.csv -o results/ --interactive
   # 分析类型
   --directivity-only       仅执行方向分析（默认）
   --full-analysis          执行完整分析（含时空震级）
-  --temporal-ratio         启用时序滑动窗口比率分析（N2/N1）
+  --temporal-ratio         启用滑动窗口比率分析（N2/N1）
+  --cumulative             启用累积窗口比率分析（窗始终从首个事件开始）
   
-  # 时序比率参数
+  # 时序比率参数（滑动窗模式）
   --ratio-window-sizes     窗口尺寸列表，逗号分隔（如 "7,30,60,90,120"）
   --ratio-time-step        步长天数（默认: 0.5）
+  
+  # 时序比率参数（累积窗模式）
+  --cumulative-step        窗增长步长天数（默认: 1.0）
+  
+  # 公共参数
   --peak-half-width        峰值区域半宽，度（默认: 30）
   --ratio-min-events       最小事件对数阈值（默认: 10）
   
@@ -245,6 +260,55 @@ The configuration file uses JSON format. Valid top-level keys are `base`, `catal
 - `*_analysis_dashboard.svg`: Comprehensive analysis dashboard
 - `*_interactive_map.html`: Interactive epicenter distribution map (optional)
 - `*_interactive_histogram.html`: Interactive azimuth histogram (optional)
+
+## Figure Specifications
+
+### Export Formats & Publication Readiness
+
+All static figures are exported by `save_pub_py()` in three formats by default:
+
+| Format | Purpose | Properties |
+|--------|---------|------------|
+| SVG | Journal submission / editing | Editable text (`svg.fonttype=none`), vector graphics |
+| PDF | Print / layout | Editable TrueType text (`pdf.fonttype=42`), vector |
+| TIFF | Raster reference | 600 DPI, lossless |
+
+Configurable via `config.base.EXPORT_FORMATS` and `config.base.EXPORT_DPI`.
+
+### Color Policy (Directional Data)
+
+| Colormap | Status | Use Case |
+|----------|--------|----------|
+| `twilight` | **Default** | Perceptually uniform cyclic colormap, suitable for 0°=360° circular data |
+| `gist_rainbow` | Fallback | Legacy cyclic colormap, retained as `config.base.COLOR_MAP_FALLBACK` |
+
+Directional data inherently wraps around (0° = 360°), which justifies a cyclic
+colormap. For non-directional plots (magnitude, depth, time series), single-hue
+sequential colormaps are used (e.g., `Reds` for magnitude, `gray` for dtime/speed).
+
+Set `COLOR_MAP` in config to switch between `twilight` and `gist_rainbow`.
+
+### Typography & Layout
+
+- **Font**: Arial / Helvetica / DejaVu Sans, with `font.size=12` (base)
+- **Spines**: top and right spines removed per Nature journal convention
+- **Grid**: light gray dashed lines (`alpha=0.3`)
+- **Figure size**: 12×8 inches (default), adjustable via `config.base.FIGURE_SIZE`
+- **Colorbar**: 5 labeled ticks at 0°/90°/180°/270°/360°, black outline
+
+### Figure Archetypes
+
+All SeisMig2D figures are `quantitative grid` archetype — data-driven charts with
+color-mapped azimuth encoding. Each figure serves a distinct scientific claim:
+
+| Figure | Claim | Evidence |
+|--------|-------|----------|
+| Directivity histogram | Dominant migration direction exists | Bar chart + von Mises mixture fits |
+| Polar histogram | Direction confirmed in circular space | Polar bars + cardinal labels |
+| Epicenter map | Events spatially cluster with directional pattern | Scatter colored by directivity |
+| Ratio evolution | N2/N1 ratio changes over time | Multi-window sliding ratio + 95% CI |
+| Peak region histogram | Two populations have different counts | Blue/red fill_between + N2/N1 annotation |
+| Dtime/speed histograms | Characteristic time/speed distributions | Histogram + mean/median markers |
 
 ## Algorithm Description
 
@@ -350,6 +414,13 @@ SeismicityMigration: A Python Tool for Earthquake Migration Analysis
 - Project Homepage: github.com/JKbear/SeisMig2D
 
 ## Changelog
+
+### v4.1.2 (2026-05-14)
+- 🔀 **Cumulative window mode**: `--cumulative` flag, window always starts from first event and grows
+- 📏 **Sliding vs cumulative distinction**: sliding uses two independent parameters (window_sizes + time_step); cumulative uses a single growth step
+- 🏷️ **TemporalDirectivityResult.mode**: new `mode` field ("sliding"|"cumulative") for downstream logic
+- 📊 **Visualizer**: ratio evolution plot adapts to cumulative mode (single blue curve)
+- 📦 **New data**: Changning YGX catalogs (full, before/after mainshock split)
 
 ### v4.1.0 (2026-05-09)
 - 🔬 **von Mises Mixture Model**: replace per-peak Gaussian with K-component vMMM for circular data

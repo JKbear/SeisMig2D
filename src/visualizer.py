@@ -40,6 +40,61 @@ color_mapper = get_color_mapper()
 coordinate_converter = get_coordinate_converter()
 logger = logging.getLogger(__name__)
 
+# --- Nature-figure publication rcParams ---
+plt.rcParams.update({
+    "font.family": "sans-serif",
+    "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans", "sans-serif"],
+    "svg.fonttype": "none",     # editable text in SVG
+    "pdf.fonttype": 42,         # editable TrueType text in PDF
+    "axes.spines.right": False,
+    "axes.spines.top": False,
+    "axes.linewidth": 0.8,
+    "legend.frameon": False,
+})
+
+
+def save_pub_py(fig: plt.Figure, filepath_base: str, dpi: int = 600,
+                formats: Optional[List[str]] = None):
+    """Save figure in publication-ready formats (SVG, PDF, TIFF).
+
+    Parameters
+    ----------
+    fig : matplotlib Figure
+    filepath_base : path WITHOUT extension (e.g. 'figures/figure1')
+    dpi : raster DPI (used for TIFF)
+    formats : list of extensions, default ['svg', 'pdf', 'tiff']
+    """
+    if formats is None:
+        formats = config.base.EXPORT_FORMATS
+    os.makedirs(os.path.dirname(filepath_base) or '.', exist_ok=True)
+    for fmt in formats:
+        if fmt == 'tiff':
+            fig.savefig(f"{filepath_base}.tiff", dpi=dpi, bbox_inches="tight")
+        elif fmt == 'svg':
+            fig.savefig(f"{filepath_base}.svg", bbox_inches="tight")
+        elif fmt == 'pdf':
+            fig.savefig(f"{filepath_base}.pdf", bbox_inches="tight")
+        else:
+            fig.savefig(f"{filepath_base}.{fmt}", dpi=dpi, bbox_inches="tight")
+    logger.info(f"Figure saved: {filepath_base}.{{{', '.join(formats)}}}")
+
+
+def _add_direction_colorbar(ax: plt.Axes, cmap_name: str, vmin: float = 0,
+                            vmax: float = 360, label: str = "Direction (degrees)",
+                            orientation: str = "vertical", **kwargs):
+    """Add a standardised direction colorbar.
+
+    Extracted to eliminate duplicated colorbar code across plot methods.
+    """
+    sm = plt.cm.ScalarMappable(cmap=cmap_name, norm=plt.Normalize(vmin=vmin, vmax=vmax))
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=ax, label=label, orientation=orientation, **kwargs)
+    cbar.set_ticks(np.linspace(vmin, vmax, num=5))
+    cbar.set_ticklabels([f'{int(x)}\u00b0' for x in np.linspace(vmin, vmax, num=5)])
+    cbar.outline.set_color('black')
+    cbar.outline.set_linewidth(0.5)
+    return cbar
+
 
 def _gaussian(x: np.ndarray, amplitude: float, mean: float, std: float) -> np.ndarray:
     """Gaussian function — kept for backward compatibility."""
@@ -56,32 +111,44 @@ def _vonmises_curve(x: np.ndarray, amplitude: float, mean: float,
 class BaseVisualizer:
     """Base visualizer"""
 
-    def __init__(self, figsize: Optional[Tuple[int, int]] = None, dpi: Optional[int] = None):
-        """Initialize visualizer"""
+    def __init__(self, figsize: Optional[Tuple[int, int]] = None, dpi: Optional[int] = None,
+                 output_dir: str = ""):
+        """Initialize visualizer
+
+        Parameters
+        ----------
+        output_dir : directory for save_figure; falls back to config FIGURE_DIR.
+        """
         self.figsize = figsize or config.base.FIGURE_SIZE
         self.dpi = dpi or config.base.DPI
         self.color_palette: Dict[str, str] = config.visualization.COLORS
+        self.output_dir = output_dir
 
-        plt.rcParams['figure.figsize'] = self.figsize
-        plt.rcParams['figure.dpi'] = self.dpi
-        plt.rcParams['font.size'] = config.base.FONT_SIZE
-
-    def save_figure(self, fig: plt.Figure, filename: str, bbox_inches: str = 'tight', **kwargs: Any):
-        """Save figure"""
+    def save_figure(self, fig: plt.Figure, filename: str, output_dir: Optional[str] = None,
+                    bbox_inches: str = 'tight', **kwargs: Any):
+        """Save figure. Uses output_dir arg > self.output_dir > config FIGURE_DIR."""
         try:
-            output_dir = config.base.FIGURE_DIR
-            os.makedirs(output_dir, exist_ok=True)
+            target_dir = output_dir or self.output_dir or config.base.FIGURE_DIR
+            os.makedirs(target_dir, exist_ok=True)
 
-            if '.' not in os.path.basename(filename):
-                filename = f"{filename}.png"
-
-            filepath = os.path.join(output_dir, filename)
-
+            filepath = os.path.join(target_dir, filename)
             fig.savefig(filepath, bbox_inches=bbox_inches, **kwargs)
             logger.info(f"Figure saved: {filepath}")
+            return filepath
 
         except Exception as e:
             logger.error(f"Failed to save figure: {e}")
+            return None
+
+    def save_figure_pub(self, fig: plt.Figure, filepath_base: str,
+                        dpi: int = 600, formats: Optional[List[str]] = None):
+        """Save in publication formats via save_pub_py.
+
+        Parameters
+        ----------
+        filepath_base : path WITHOUT extension
+        """
+        save_pub_py(fig, filepath_base, dpi=dpi, formats=formats)
 
     def close_figure(self, fig: plt.Figure):
         """Close figure"""
@@ -137,7 +204,7 @@ class DirectivityVisualizer(BaseVisualizer):
                     text_x = fit['mean'] + 5
                 ax.text(text_x, peak_y,
                        f'Mean: {fit["mean"]:.0f}°\nStd: {fit["std"]:.2f}',
-                       verticalalignment='center', horizontalalignment='left', fontsize=9)
+                       verticalalignment='center', horizontalalignment='left', fontsize=9, linespacing=1.6)
 
         ax.set_xlabel('Direction from the East (degree)', fontsize=12)
         ax.set_ylabel('Number of Earthquake Pairs', fontsize=12)
@@ -147,14 +214,7 @@ class DirectivityVisualizer(BaseVisualizer):
 
         ax.legend(loc='upper right')
 
-        # Colorbar showing angle → color mapping
-        sm = plt.cm.ScalarMappable(cmap=cmap_name, norm=plt.Normalize(vmin=0, vmax=360))
-        sm.set_array([])
-        cbar = plt.colorbar(sm, ax=ax, label='Direction (degrees)', orientation='vertical')
-        cbar.set_ticks(np.linspace(0, 360, num=5))
-        cbar.set_ticklabels([f'{int(x)}°' for x in np.linspace(0, 360, num=5)])
-        cbar.outline.set_color('black')
-        cbar.outline.set_linewidth(0.5)
+        _add_direction_colorbar(ax, cmap_name)
 
         plt.tight_layout()
 
@@ -214,15 +274,10 @@ class DirectivityVisualizer(BaseVisualizer):
                 ax.plot(x_range, fitted_curve, 'r--', linewidth=2)
                 ax.text(np.radians(fit['mean']), ax.get_ylim()[1] * 0.85,
                        f'Mean: {fit["mean"]:.0f}°\nStd: {fit["std"]:.2f}',
-                       ha='center', va='bottom', fontsize=9, color='black')
+                       ha='center', va='bottom', fontsize=9, color='black', linespacing=1.6)
 
         # Colorbar
-        sm = plt.cm.ScalarMappable(cmap=cmap_name, norm=plt.Normalize(vmin=0, vmax=360))
-        sm.set_array([])
-        cbar = plt.colorbar(sm, ax=ax, label='Direction (degrees)',
-                          orientation='vertical', pad=0.1, shrink=0.5)
-        cbar.set_ticks(np.linspace(0, 360, num=5))
-        cbar.set_ticklabels([f'{int(x)}°' for x in np.linspace(0, 360, num=5)])
+        _add_direction_colorbar(ax, cmap_name, pad=0.1, shrink=0.5)
 
         plt.tight_layout()
 
@@ -359,7 +414,7 @@ class DirectivityVisualizer(BaseVisualizer):
                     text_x = fit['mean'] + 5
                 ax.text(text_x, peak_y,
                        f'Mean: {fit["mean"]:.0f}°\nStd: {fit["std"]:.2f}',
-                       verticalalignment='center', horizontalalignment='left', fontsize=9)
+                       verticalalignment='center', horizontalalignment='left', fontsize=9, linespacing=1.6)
 
         # Peak region highlights and ratio
         if len(peaks) >= 2:
@@ -403,7 +458,7 @@ class DirectivityVisualizer(BaseVisualizer):
                        f'Peak 1 count: {count1}\nPeak 2 count: {count2}\nN2/N1 ratio: {ratio:.2f}',
                        transform=ax.get_xaxis_transform(),
                        verticalalignment='top', horizontalalignment='center',
-                       bbox=dict(facecolor='white', alpha=0.8), fontsize=9)
+                       fontsize=9, linespacing=1.6)
 
         ax.set_xlabel('Direction from the East (degree)', fontsize=12)
         ax.set_ylabel('Number of Earthquake Pairs', fontsize=12)
@@ -412,13 +467,7 @@ class DirectivityVisualizer(BaseVisualizer):
         ax.grid(True, alpha=0.3, color='gray', linestyle='--')
         ax.legend(loc='upper right')
 
-        sm = plt.cm.ScalarMappable(cmap=cmap_name, norm=plt.Normalize(vmin=0, vmax=360))
-        sm.set_array([])
-        cbar = plt.colorbar(sm, ax=ax, label='Direction (degrees)', orientation='vertical')
-        cbar.set_ticks(np.linspace(0, 360, num=5))
-        cbar.set_ticklabels([f'{int(x)}°' for x in np.linspace(0, 360, num=5)])
-        cbar.outline.set_color('black')
-        cbar.outline.set_linewidth(0.5)
+        _add_direction_colorbar(ax, cmap_name)
 
         plt.tight_layout()
         if save_filename:
@@ -430,10 +479,19 @@ class DirectivityVisualizer(BaseVisualizer):
                                           show_confidence: bool = True,
                                           title: str = "Directivity Ratio Evolution",
                                           save_filename: Optional[str] = None) -> plt.Figure:
-        """Plot N2/N1 ratio evolution for multiple window sizes (log y-scale)."""
+        """Plot N2/N1 ratio evolution (log y-scale).
+
+        Sliding mode:  multiple window-size curves with per-curve CI shading.
+        Cumulative mode: single curve showing ratio convergence from first event.
+        """
+        is_cumulative = getattr(temporal_result, 'mode', 'sliding') == 'cumulative'
+
         fig, ax = plt.subplots(figsize=(12, 8))
 
-        color_palette = ['blue', 'red', 'green', 'purple', 'orange']
+        if is_cumulative:
+            color_palette = ['#1f77b4']  # single blue curve
+        else:
+            color_palette = ['blue', 'red', 'green', 'purple', 'orange']
 
         for idx, ws in enumerate(temporal_result.window_sizes):
             days = temporal_result.times_by_window[idx]
@@ -441,16 +499,22 @@ class DirectivityVisualizer(BaseVisualizer):
             if len(days) == 0:
                 continue
             color = color_palette[idx % len(color_palette)]
-            ax.plot(days, ratios, linestyle='-', marker='.',
-                   color=color, markersize=2, linewidth=2,
-                   label=f'{ws:.1f} days')
+
+            if is_cumulative:
+                label = 'Cumulative from first event'
+                ax.plot(days, ratios, linestyle='-', color=color, linewidth=2,
+                       label=label)
+            else:
+                ax.plot(days, ratios, linestyle='-', marker='.',
+                       color=color, markersize=2, linewidth=2,
+                       label=f'{ws:.1f} days')
 
             # Confidence interval shading (label only first time)
             if show_confidence:
                 ci_lower = temporal_result.ci_lower_by_window[idx]
                 ci_upper = temporal_result.ci_upper_by_window[idx]
                 if len(ci_lower) == len(days) and len(days) > 0:
-                    ci_label = '95% CI (H\u2080: ratio=1)' if idx == 0 else None
+                    ci_label = '95% CI (H0: ratio=1)' if (idx == 0 or is_cumulative) else None
                     ax.fill_between(days, ci_lower, ci_upper,
                                    color='gray', alpha=0.15, label=ci_label)
 
@@ -459,7 +523,11 @@ class DirectivityVisualizer(BaseVisualizer):
         ax.set_yticks([0.1, 0.2, 0.5, 1, 2, 5, 10])
         ax.set_yticklabels(['0.1', '0.2', '0.5', '1', '2', '5', '10'])
         ax.axhline(y=1, color='k', linestyle='--', alpha=0.3)
-        ax.set_xlabel('Days since first event', fontsize=12)
+
+        if is_cumulative:
+            ax.set_xlabel('Days since first event (cumulative window)', fontsize=12)
+        else:
+            ax.set_xlabel('Days since first event', fontsize=12)
         ax.set_ylabel('N2/N1 Ratio', fontsize=12)
         ax.set_title(title, fontsize=14, fontweight='bold')
         ax.grid(True, which='both', ls='-', alpha=0.2)
@@ -504,10 +572,10 @@ class DirectivityVisualizer(BaseVisualizer):
         if show_confidence and len(ci_lower) == len(days) and len(days) > 0:
             ax.fill_between(days, ci_lower, ci_upper,
                            color='gray', alpha=0.2,
-                           label='95% CI (H\u2080: ratio=1)')
+                           label='95% CI (H0: ratio=1)')
 
-        ax.plot(days, ratios, 'b-', linewidth=2, label=f'{ws:.1f} days window')
-        ax.plot(days, ratios, 'b.', markersize=3, alpha=0.5)
+        ax.plot(days, ratios, 'k-', linewidth=2, label=f'{ws:.1f} days window')
+        ax.plot(days, ratios, 'k.', markersize=3, alpha=0.5)
 
         ax.axhline(y=1, color='k', linestyle='--', alpha=0.3, label='Ratio = 1')
 
@@ -773,11 +841,11 @@ class SeismicityVisualizer(BaseVisualizer):
         ax.text(0.98, 0.95, f'Mean: {mean_v:.1f} s\nMedian: {median_v:.1f} s',
                 transform=ax.transAxes, verticalalignment='top',
                 horizontalalignment='right',
-                bbox=dict(facecolor='white', alpha=0.8), fontsize=10)
+                fontsize=10, linespacing=1.6)
         # Mark mean and median on histogram
         ax.axvline(mean_v, color='red', linestyle='--', linewidth=1.5, alpha=0.7, label='Mean')
         ax.axvline(median_v, color='blue', linestyle='--', linewidth=1.5, alpha=0.7, label='Median')
-        ax.legend(loc='upper left', fontsize=9)
+        ax.legend(loc='upper center', fontsize=9)
 
         plt.tight_layout()
         if save_filename:
@@ -814,10 +882,10 @@ class SeismicityVisualizer(BaseVisualizer):
         ax.text(0.98, 0.95, f'Mean: {mean_v:.5f} km/s\nMedian: {median_v:.5f} km/s',
                 transform=ax.transAxes, verticalalignment='top',
                 horizontalalignment='right',
-                bbox=dict(facecolor='white', alpha=0.8), fontsize=10)
+                fontsize=10, linespacing=1.6)
         ax.axvline(mean_v, color='red', linestyle='--', linewidth=1.5, alpha=0.7, label='Mean')
         ax.axvline(median_v, color='blue', linestyle='--', linewidth=1.5, alpha=0.7, label='Median')
-        ax.legend(loc='upper left', fontsize=9)
+        ax.legend(loc='upper center', fontsize=9)
 
         plt.tight_layout()
         if save_filename:
@@ -1027,7 +1095,6 @@ class ComprehensiveVisualizer(BaseVisualizer):
         self.directivity_viz.plot_directivity_histogram(
             analysis_result.directional_analysis,
             title="Directivity Distribution with Gaussian Fits",
-            show_statistics=False,
             ax=ax3
         )
 
@@ -1036,7 +1103,6 @@ class ComprehensiveVisualizer(BaseVisualizer):
         self.directivity_viz.plot_polar_histogram(
             analysis_result.directional_analysis,
             title="Polar Directivity",
-            show_statistics=False,
             ax=ax4
         )
 
@@ -1093,7 +1159,7 @@ class ComprehensiveVisualizer(BaseVisualizer):
         ax7.text(0.05, 0.95, stats_text, transform=ax7.transAxes,
                 verticalalignment='top', fontsize=12,
                 bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8),
-                family='monospace')
+                family='monospace', linespacing=1.6)
 
         fig.suptitle(title, fontsize=16, fontweight='bold', y=0.98)
 
@@ -1103,42 +1169,42 @@ class ComprehensiveVisualizer(BaseVisualizer):
         return fig
 
 # Convenience functions
-def plot_directivity_histogram(analysis_result: DirectivityAnalysisResult, **kwargs: Any) -> plt.Figure:
+def plot_directivity_histogram(analysis_result: DirectivityAnalysisResult, output_dir: str = "", **kwargs: Any) -> plt.Figure:
     """Plot directivity histogram (convenience function)"""
-    viz = DirectivityVisualizer()
+    viz = DirectivityVisualizer(output_dir=output_dir)
     return viz.plot_directivity_histogram(analysis_result, **kwargs)
 
-def plot_polar_histogram(analysis_result: DirectivityAnalysisResult, **kwargs: Any) -> plt.Figure:
+def plot_polar_histogram(analysis_result: DirectivityAnalysisResult, output_dir: str = "", **kwargs: Any) -> plt.Figure:
     """Plot polar histogram (convenience function)"""
-    viz = DirectivityVisualizer()
+    viz = DirectivityVisualizer(output_dir=output_dir)
     return viz.plot_polar_histogram(analysis_result, **kwargs)
 
-def plot_epicenter_map(events: List[EarthquakeEvent], **kwargs: Any) -> plt.Figure:
+def plot_epicenter_map(events: List[EarthquakeEvent], output_dir: str = "", **kwargs: Any) -> plt.Figure:
     """Plot epicenter map (convenience function)"""
-    viz = SeismicityVisualizer()
+    viz = SeismicityVisualizer(output_dir=output_dir)
     return viz.plot_epicenter_map(events, **kwargs)
 
-def plot_dtime_histogram(analysis_result: DirectivityAnalysisResult, **kwargs: Any) -> plt.Figure:
+def plot_dtime_histogram(analysis_result: DirectivityAnalysisResult, output_dir: str = "", **kwargs: Any) -> plt.Figure:
     """Plot dtime histogram (convenience function)"""
-    viz = SeismicityVisualizer()
+    viz = SeismicityVisualizer(output_dir=output_dir)
     return viz.plot_dtime_histogram(analysis_result, **kwargs)
 
-def plot_speed_histogram(analysis_result: DirectivityAnalysisResult, **kwargs: Any) -> plt.Figure:
+def plot_speed_histogram(analysis_result: DirectivityAnalysisResult, output_dir: str = "", **kwargs: Any) -> plt.Figure:
     """Plot speed histogram (convenience function)"""
-    viz = SeismicityVisualizer()
+    viz = SeismicityVisualizer(output_dir=output_dir)
     return viz.plot_speed_histogram(analysis_result, **kwargs)
 
-def plot_dtime_evolution(analysis_result: DirectivityAnalysisResult, **kwargs: Any) -> plt.Figure:
+def plot_dtime_evolution(analysis_result: DirectivityAnalysisResult, output_dir: str = "", **kwargs: Any) -> plt.Figure:
     """Plot dtime vs time (convenience function)"""
-    viz = SeismicityVisualizer()
+    viz = SeismicityVisualizer(output_dir=output_dir)
     return viz.plot_dtime_evolution(analysis_result, **kwargs)
 
-def plot_speed_evolution(analysis_result: DirectivityAnalysisResult, **kwargs: Any) -> plt.Figure:
+def plot_speed_evolution(analysis_result: DirectivityAnalysisResult, output_dir: str = "", **kwargs: Any) -> plt.Figure:
     """Plot speed vs time (convenience function)"""
-    viz = SeismicityVisualizer()
+    viz = SeismicityVisualizer(output_dir=output_dir)
     return viz.plot_speed_evolution(analysis_result, **kwargs)
 
-def create_analysis_dashboard(events: List[EarthquakeEvent], analysis_result: MigrationAnalysisResult, **kwargs: Any) -> plt.Figure:
+def create_analysis_dashboard(events: List[EarthquakeEvent], analysis_result: MigrationAnalysisResult, output_dir: str = "", **kwargs: Any) -> plt.Figure:
     """Create analysis dashboard (convenience function)"""
-    viz = ComprehensiveVisualizer()
+    viz = ComprehensiveVisualizer(output_dir=output_dir)
     return viz.create_analysis_dashboard(events, analysis_result, **kwargs)

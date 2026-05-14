@@ -67,6 +67,7 @@ class TemporalDirectivityResult:
     ci_lower_by_window: List[np.ndarray]    # 95% CI lower bound per window
     ci_upper_by_window: List[np.ndarray]    # 95% CI upper bound per window
     statistics: Dict[str, Any]
+    mode: str = "sliding"                   # "sliding" or "cumulative"
 
 class DirectivityAnalyzer:
     """Directivity analyzer"""
@@ -773,6 +774,134 @@ class MigrationAnalyzer:
             ci_lower_by_window=ci_lower_by_window,
             ci_upper_by_window=ci_upper_by_window,
             statistics=statistics,
+            mode='sliding',
+        )
+
+    def cumulative_directivity_ratio_analysis(
+        self, events: List[EarthquakeEvent],
+        time_step: Optional[float] = None,
+        peak_half_width: Optional[float] = None,
+        min_events: Optional[int] = None
+    ) -> TemporalDirectivityResult:
+        """Cumulative-window N2/N1 ratio analysis.
+
+        The window always starts from the first event and grows by
+        ``time_step`` days at each iteration. This produces a naturally
+        smoothing curve showing how the N2/N1 ratio converges as more
+        post-mainshock data is included.
+
+        Parameters
+        ----------
+        events : list of EarthquakeEvent
+        time_step : float, optional
+            Window growth increment in days. Default from config.
+        peak_half_width : float, optional
+            Angular half-width (degrees) for counting samples in each
+            peak region. Default from config.
+        min_events : int, optional
+            Minimum events in the cumulative window required to compute
+            a ratio. Default from config.
+
+        Returns
+        -------
+        TemporalDirectivityResult with ``mode='cumulative'``.
+        """
+        if time_step is None:
+            time_step = config.base.CUMULATIVE_TIME_STEP
+        if peak_half_width is None:
+            peak_half_width = float(config.base.PEAK_HALF_WIDTH)
+        if min_events is None:
+            min_events = config.base.MIN_EVENTS_FOR_RATIO
+
+        # Sort events by time
+        events_with_time = [e for e in events if e.time is not None]
+        if len(events_with_time) < min_events:
+            raise ValueError(
+                f"At least {min_events} events with time required, "
+                f"got {len(events_with_time)}"
+            )
+        events_sorted = sorted(events_with_time, key=lambda e: e.time)
+        n_events = len(events_sorted)
+
+        # Calculate all directivities once (no distance filter)
+        all_directivities, _, _, _, _, _ = self.directivity_analyzer.calculate_event_pairs(
+            events_sorted, min_distance_km=0.0, max_distance_km=1e9
+        )
+        if len(all_directivities) == 0:
+            raise ValueError("No valid event pairs for ratio analysis")
+
+        # Pair timestamps: pair i -> events_sorted[i+1].time
+        pair_times = np.array([
+            events_sorted[i + 1].time.timestamp() if events_sorted[i + 1].time else 0.0
+            for i in range(n_events - 1)
+        ])
+
+        start_ts = events_sorted[0].time.timestamp()
+        end_ts = events_sorted[-1].time.timestamp()
+        step_sec = time_step * 86400.0
+
+        times_list: List[float] = []
+        ratios_list: List[float] = []
+        n_totals_list: List[float] = []
+
+        current_end = start_ts + step_sec
+        while current_end <= end_ts:
+            right = np.searchsorted(pair_times, current_end, side='right')
+            N = right  # pairs from 0 to right (always starts from start_ts)
+
+            if N >= min_events:
+                subset = all_directivities[:right]
+                hist, bin_edges, bin_centers = self.directivity_analyzer.create_histogram(subset)
+                peaks, _ = self.directivity_analyzer.detect_peaks(hist, bin_centers)
+
+                if len(peaks) >= 2:
+                    center1 = bin_centers[peaks[0]]
+                    center2 = bin_centers[peaks[1]]
+                    count1 = DirectivityAnalyzer.count_samples_in_peak_region(
+                        subset, center1, peak_half_width
+                    )
+                    count2 = DirectivityAnalyzer.count_samples_in_peak_region(
+                        subset, center2, peak_half_width
+                    )
+                    if count1 > 0:
+                        ratio = count2 / count1
+                        days = (current_end - start_ts) / 86400.0
+                        times_list.append(days)
+                        ratios_list.append(ratio)
+                        n_totals_list.append(float(N))
+
+            current_end += step_sec
+
+        if not times_list:
+            raise ValueError(
+                f"No windows met the min_events={min_events} threshold"
+            )
+
+        times_arr = np.array(times_list)
+        ratios_arr = np.array(ratios_list)
+        n_totals_arr = np.array(n_totals_list)
+
+        ci_lower, ci_upper = DirectivityAnalyzer.calculate_confidence_intervals(
+            n_totals_arr
+        )
+
+        statistics: Dict[str, Any] = {
+            'catalog_duration_days': (end_ts - start_ts) / 86400.0,
+            'total_pairs': len(all_directivities),
+            'total_windows_computed': len(times_list),
+            'window_sizes_used': 'cumulative',
+            'mean_ratio': float(np.mean(ratios_arr)),
+        }
+
+        return TemporalDirectivityResult(
+            window_sizes=[0.0],  # placeholder, not meaningful for cumulative
+            times_by_window=[times_arr],
+            ratios_by_window=[ratios_arr],
+            n_totals_by_window=[n_totals_arr],
+            ci_lower_by_window=[ci_lower],
+            ci_upper_by_window=[ci_upper],
+            statistics=statistics,
+            mode='cumulative',
         )
 
 # Convenience functions
