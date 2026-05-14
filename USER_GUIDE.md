@@ -55,6 +55,13 @@ python main.py -i data/earthquakes.csv -o results/ --directivity-only
 # Full analysis (including migration analysis)
 python main.py -i data/earthquakes.csv -o results/ --full-analysis
 
+# Sliding window ratio analysis
+python main.py -i data/earthquakes.csv -o results/ --temporal-ratio \
+  --ratio-window-sizes "3,7,14,30" --ratio-time-step 1.0
+
+# Cumulative window ratio analysis
+python main.py -i data/earthquakes.csv -o results/ --cumulative --cumulative-step 1.0
+
 # Generate interactive visualizations (requires plotly)
 python main.py -i data/earthquakes.csv -o results/ --interactive
 
@@ -81,11 +88,17 @@ python main.py -i data/earthquakes.csv -o results/ --no-plots
 **Analysis Types:**
 - `--directivity-only`: Execute directivity analysis only
 - `--full-analysis`: Execute full analysis (including migration analysis)
-- `--temporal-ratio`: Enable temporal sliding window N2/N1 ratio analysis
+- `--temporal-ratio`: Enable sliding window N2/N1 ratio analysis
+- `--cumulative`: Enable cumulative window ratio analysis (window always starts from first event, grows by `--cumulative-step`; overrides `--temporal-ratio`)
 
-**Temporal Ratio Parameters:**
-- `--ratio-window-sizes`: Comma-separated window sizes in days (e.g., `"0.5,1.0,1.5,2.0,2.5"`)
-- `--ratio-time-step`: Time step between windows in days (default: 0.5)
+**Temporal Ratio Parameters (sliding mode):**
+- `--ratio-window-sizes`: Comma-separated window sizes in days — how much data each window contains (e.g., `"7,30,60,90"`)
+- `--ratio-time-step`: Time step between consecutive windows in days — how much the window moves (default: 0.5)
+
+**Temporal Ratio Parameters (cumulative mode):**
+- `--cumulative-step`: Window growth step in days (default: 1.0)
+
+**Common Parameters (both modes):**
 - `--peak-half-width`: Half-width of peak region in degrees (default: 30)
 - `--ratio-min-events`: Minimum events in window for ratio (default: 10)
 
@@ -525,9 +538,9 @@ When using command-line interface or saving visualizations:
 - `*_interactive_map.html`: Interactive epicenter map (if `--interactive` used)
 - `*_interactive_histogram.html`: Interactive directivity histogram (if `--interactive` used)
 
-With `--temporal-ratio`:
-- `*_ratio_evolution.{format}`: Multi-window N2/N1 ratio evolution
-- `*_ratio_single_window.{format}`: Single best-window ratio plot
+With `--temporal-ratio` or `--cumulative`:
+- `*_ratio_evolution.{format}`: N2/N1 ratio evolution (multi-window for sliding, single curve for cumulative)
+- `*_ratio_single_window.{format}`: Single best-window ratio plot (sliding only)
 - `*_peak_region_histogram.{format}`: Directivity histogram with peak region highlights
 
 Supported formats: `svg` (default), `pdf`, `png`
@@ -645,9 +658,15 @@ directivity_results = calculate_directivities(
 )
 ```
 
-### Temporal Sliding Ratio Analysis (N2/N1)
+### Temporal Ratio Analysis (N2/N1) — Two Modes
 
-Compute N2/N1 ratio evolution over time using sliding windows:
+#### Sliding Window Mode (`--temporal-ratio`)
+
+Fixed-size windows slide across the catalog. Two independent parameters:
+- **window_sizes**: temporal window length (days) — how much data each window contains
+- **time_step**: step between consecutive windows (days) — how much the window moves
+
+Captures temporal variability in N2/N1 ratio. Ratio can fluctuate when event density is low.
 
 ```python
 from src.seismic_analyzer import MigrationAnalyzer
@@ -655,10 +674,10 @@ from src.seismic_analyzer import MigrationAnalyzer
 analyzer = MigrationAnalyzer()
 ratio_result = analyzer.temporal_directivity_ratio_analysis(
     events,
-    window_sizes=[0.5, 1.0, 1.5, 2.0, 2.5],  # days
-    time_step=0.5,   # days between windows
-    peak_half_width=30,  # degrees around peak center
-    min_events=10,   # minimum pairs per window
+    window_sizes=[3, 7, 14, 30],  # days — window length
+    time_step=1.0,                # days — step between windows
+    peak_half_width=30,           # degrees around peak center
+    min_events=10,                # minimum pairs per window
 )
 
 # Visualize
@@ -672,10 +691,52 @@ dv.plot_histogram_with_peak_regions(directivity_result)
 CLI equivalent:
 ```bash
 python main.py -i data/catalog.txt --temporal-ratio \
-  --ratio-window-sizes "0.5,1.0,1.5,2.0,2.5" \
-  --ratio-time-step 0.5 \
+  --ratio-window-sizes "3,7,14,30" \
+  --ratio-time-step 1.0 \
   --peak-half-width 30
 ```
+
+#### Cumulative Window Mode (`--cumulative`)
+
+Window always starts from the first event and grows by a fixed step.
+One parameter:
+- **time_step**: growth increment (days)
+
+Produces a naturally smooth convergence curve — ideal for
+post-mainshock sequences where the ratio should stabilise as more data is included.
+
+```python
+ratio_result = analyzer.cumulative_directivity_ratio_analysis(
+    events,
+    time_step=1.0,         # days — growth step
+    peak_half_width=30,
+    min_events=10,
+)
+
+# Same visualizer works for both modes
+dv.plot_directivity_ratio_evolution(ratio_result)
+```
+
+CLI equivalent:
+```bash
+python main.py -i data/catalog.txt --cumulative \
+  --cumulative-step 1.0 \
+  --peak-half-width 30
+```
+
+#### Choosing a Mode
+
+| Aspect | Sliding | Cumulative |
+|--------|---------|------------|
+| Window start | Moves across time | Always t₀ |
+| Curve behaviour | Can be volatile | Monotonically smooth |
+| Best for | Detecting temporal changes | Post-mainshock convergence |
+| Parameters | window_sizes + time_step | time_step |
+| Event density requirement | Higher (each window independent) | Lower (always growing) |
+
+For long-span, low-density catalogs, cumulative mode gives much more stable
+ratios. For dense catalogs (e.g., immediate aftershocks), sliding mode reveals
+temporal evolution.
 
 ### SEP Dtime & Speed Analysis
 
