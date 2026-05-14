@@ -772,7 +772,6 @@ python main.py -i data/catalog.txt --min-dtime 10
 ```
 
 Default threshold is 10 seconds. Set to 0 to disable.
-See `docs/SEP_physical_interpretation.md` for detailed discussion.
 
 ## Troubleshooting
 

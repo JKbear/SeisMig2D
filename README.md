@@ -22,7 +22,7 @@ SeismicityMigration is a scientific computing tool for analyzing seismic activit
 - Proper handling of circular topology (0° = 360°)
 - Simultaneous fitting of all components via L-BFGS-B optimisation
 - κ (concentration) and σ-equivalent per component
-- SEP inter-event time & speed physical interpretation: [docs/SEP_physical_interpretation.md](docs/SEP_physical_interpretation.md)
+- SEP inter-event time & speed physical interpretation
 
 ### 🗺️ Spatial Analysis
 - Epicenter distribution visualization
@@ -430,7 +430,7 @@ SeismicityMigration: A Python Tool for Earthquake Migration Analysis
 - 📊 **Peak region histograms**: blue/red fill_between highlights, N2/N1 ratio annotations
 - 🎨 **Visual overhaul**: gist_rainbow colormap, white background, black borders, dashed grids
 - 🏷️ **Naming**: bearing → directivity throughout codebase
-- 📝 **Documentation**: [SEP physical interpretation](docs/SEP_physical_interpretation.md), CLAUDE.md, updated README & USER_GUIDE
+- 📝 **Documentation**: CLAUDE.md, updated README & USER_GUIDE
 - 🧹 **Code quality**: extract _gaussian, combine filter masks, searchsorted optimization, remove dead code
 - 📦 **Data**: fixed-format catalogs for Wenchuan (HuangWuFang & ChenJiuhui), Changning, Ridgecrest, Turkey
 
